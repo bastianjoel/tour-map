@@ -220,15 +220,17 @@ func (app *App) periodicWaypointScan() {
 		}
 
 		token := strings.TrimSpace(string(data))
-		if token == "" {
-			log.Printf("Tracking token file %s is empty", trackingTokenFile)
-			continue
-		}
-
 		if token != lastToken {
 			log.Printf("Using new tracking token: %s", token)
 			lastToken = token
 		} else if tokenDeleted {
+			continue
+		}
+
+		if token == "" {
+			log.Printf("Tracking token file %s is empty", trackingTokenFile)
+			lastToken = token
+			tokenDeleted = true
 			continue
 		}
 
