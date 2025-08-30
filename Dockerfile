@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 golang:1.25
+FROM golang:1.25
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN go mod download
 COPY main.go ./
 COPY index.html ./
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /tour-map
+RUN GOOS=linux go build -o /tour-map
 
 EXPOSE 8080
 
