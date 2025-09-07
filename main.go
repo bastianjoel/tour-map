@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"maps"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 const dataDir = "./data"
 const imagesDir = "./images"
 const trackingTokenFile = "./tracking_token.txt"
+const codesFile = "./codes.txt"
 
 //go:embed index.html
 var tmpl string
@@ -46,12 +48,15 @@ type App struct {
 	imageLocations map[string]GPSCoords
 	wpMutex        sync.RWMutex
 	imagesMutex    sync.RWMutex
+	codesMutex     sync.RWMutex
+	codes          map[string]struct{}
 }
 
 func main() {
 	app := &App{
 		waypoints:      make([]Waypoint, 0),
 		imageLocations: make(map[string]GPSCoords),
+		codes:          make(map[string]struct{}),
 	}
 
 	// Create data dir if not exists
@@ -111,7 +116,7 @@ func (app *App) loadWaypoints() {
 		return a.Timestamp.Compare(b.Timestamp)
 	})
 
-	if (len(nextPathData) > 0) {
+	if len(nextPathData) > 0 {
 		latest := nextPathData[len(nextPathData)-1].Timestamp
 		app.latestWaypoint = &latest
 	}
@@ -158,7 +163,6 @@ func (app *App) scanImages() {
 	defer app.imagesMutex.Unlock()
 
 	app.imageLocations = newGPSData
-	log.Printf("Updated GPS data for %d images", len(app.imageLocations))
 }
 
 // Check if file is an image
@@ -199,7 +203,6 @@ func (app *App) periodicImageScan() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		log.Println("Performing periodic image scan...")
 		app.scanImages()
 	}
 }
@@ -212,6 +215,29 @@ func (app *App) periodicWaypointScan() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		{
+			data, err := os.ReadFile(codesFile)
+			if err != nil {
+				log.Printf("Error reading codes file %s: %v", codesFile, err)
+			} else {
+				codes := strings.TrimSpace(string(data))
+				if codes != "" {
+					newCodes := strings.Split(codes, "\n")
+					app.codesMutex.Lock()
+					if app.codes == nil {
+						app.codes = make(map[string]struct{})
+					}
+					for _, code := range newCodes {
+						code = strings.TrimSpace(code)
+						if code != "" {
+							app.codes[code] = struct{}{}
+						}
+					}
+					app.codesMutex.Unlock()
+				}
+			}
+		}
+
 		// Call http endpoint defined in tracking_token.txt
 		data, err := os.ReadFile(trackingTokenFile)
 		if err != nil {
@@ -252,7 +278,7 @@ func (app *App) periodicWaypointScan() {
 		}
 
 		// Read as string
-		dataRaw, err := io.ReadAll(resp.Body); 
+		dataRaw, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("Error reading tracking response body: %v", err)
 			resp.Body.Close()
@@ -272,7 +298,6 @@ func (app *App) periodicWaypointScan() {
 			if app.latestWaypoint == nil || fetchedWaypoints.Timestamp.After(*app.latestWaypoint) {
 				app.waypoints = append(app.waypoints, fetchedWaypoints)
 				app.latestWaypoint = &fetchedWaypoints.Timestamp
-				log.Printf("Added new waypoint at %s", fetchedWaypoints.Timestamp)
 			}
 			app.wpMutex.Unlock()
 
@@ -291,6 +316,25 @@ func (app *App) setupHTTPServer() {
 	http.HandleFunc("/", app.handleIndex)
 }
 
+func distanceKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371.0
+
+	lat1Rad := lat1 * math.Pi / 180
+	lon1Rad := lon1 * math.Pi / 180
+	lat2Rad := lat2 * math.Pi / 180
+	lon2Rad := lon2 * math.Pi / 180
+
+	dLat := lat2Rad - lat1Rad
+	dLon := lon2Rad - lon1Rad
+
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1Rad)*math.Cos(lat2Rad)*
+			math.Sin(dLon/2)*math.Sin(dLon/2)
+
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return R * c
+}
+
 // Handle main index page
 func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	app.wpMutex.RLock()
@@ -301,6 +345,22 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	for _, wp := range app.waypoints {
 		waypoints = append(waypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
 	}
+
+	code := r.URL.Query().Get("code")
+	app.codesMutex.RLock()
+	if _, exists := app.codes[code]; !exists {
+		lastWaypoint := waypoints[len(waypoints)-1]
+		i := len(waypoints) - 1
+		for ; i >= 0; i-- {
+			// if distance is more than 1km, break
+			if distanceKm(lastWaypoint[0], lastWaypoint[1], waypoints[i][0], waypoints[i][1]) > 10.0 {
+				break
+			}
+		}
+
+		waypoints = waypoints[:i+1]
+	}
+	app.codesMutex.RUnlock()
 
 	app.imagesMutex.RUnlock()
 	app.wpMutex.RUnlock()
