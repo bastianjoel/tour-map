@@ -348,7 +348,7 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	app.codesMutex.RLock()
-	if _, exists := app.codes[code]; !exists {
+	if _, exists := app.codes[code]; !exists && len(waypoints) > 0 {
 		lastWaypoint := waypoints[len(waypoints)-1]
 		i := len(waypoints) - 1
 		for ; i >= 0; i-- {
