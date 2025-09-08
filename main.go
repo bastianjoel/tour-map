@@ -337,14 +337,17 @@ func distanceKm(lat1, lon1, lat2, lon2 float64) float64 {
 
 // Handle main index page
 func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
-	app.wpMutex.RLock()
 	app.imagesMutex.RLock()
 	images := make(map[string]GPSCoords)
 	maps.Copy(images, app.imageLocations)
+	app.imagesMutex.RUnlock()
+	
+	app.wpMutex.RLock()
 	waypoints := make([][]float64, 0, len(app.waypoints))
 	for _, wp := range app.waypoints {
 		waypoints = append(waypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
 	}
+	app.wpMutex.RUnlock()
 
 	code := r.URL.Query().Get("code")
 	app.codesMutex.RLock()
@@ -361,9 +364,6 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		waypoints = waypoints[:i+1]
 	}
 	app.codesMutex.RUnlock()
-
-	app.imagesMutex.RUnlock()
-	app.wpMutex.RUnlock()
 
 	t, err := template.New("index").Parse(tmpl)
 	if err != nil {
