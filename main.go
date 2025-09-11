@@ -371,12 +371,29 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	imageData := make(map[string][]float64)
+	for filename, coords := range images {
+		imageData[filename] = []float64{coords.Latitude, coords.Longitude}
+	}
+
+	imageDataJson, err := json.Marshal(imageData)
+	if err != nil {
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
+		return
+	}
+
+	waypointsJson, err := json.Marshal(waypoints)
+	if err != nil {
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
+		return
+	}
+
 	data := struct {
-		Images    map[string]GPSCoords
-		Waypoints [][]float64
+		Images    template.JS
+		Waypoints template.JS
 	}{
-		Images:    images,
-		Waypoints: waypoints,
+		Images:    template.JS(string(imageDataJson)),
+		Waypoints: template.JS(string(waypointsJson)),
 	}
 
 	w.Header().Set("Content-Type", "text/html")
