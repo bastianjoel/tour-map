@@ -309,8 +309,12 @@ func (app *App) periodicWaypointScan() {
 
 // Setup HTTP server routes
 func (app *App) setupHTTPServer() {
-	// Serve static files from /images
-	http.Handle("/images/", http.StripPrefix("/images/", http.FileServer(http.Dir(imagesDir))))
+	// Serve static files from /images with cache control headers
+	imageHandler := http.StripPrefix("/images/", http.FileServer(http.Dir(imagesDir)))
+	http.Handle("/images/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=259200")
+		imageHandler.ServeHTTP(w, r)
+	}))
 
 	// Main index page
 	http.HandleFunc("/", app.handleIndex)
