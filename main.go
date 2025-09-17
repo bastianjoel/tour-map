@@ -147,18 +147,18 @@ func (app *App) loadWaypoints() {
 	// Combine and filter waypoints
 	allWaypoints := make([]Waypoint, 0, len(jsonWaypoints)+len(fitWaypoints))
 	
-	// If FIT waypoints exist, filter out JSON waypoints that are before the earliest FIT waypoint
+	// If FIT waypoints exist, filter out JSON waypoints that are before or equal to the latest FIT waypoint
 	if len(fitWaypoints) > 0 {
-		// Sort FIT waypoints first to find earliest
+		// Sort FIT waypoints first to find latest
 		slices.SortFunc(fitWaypoints, func(a, b Waypoint) int {
 			return a.Timestamp.Compare(b.Timestamp)
 		})
 		
-		earliestFitTime := fitWaypoints[0].Timestamp
+		latestFitTime := fitWaypoints[len(fitWaypoints)-1].Timestamp
 		
-		// Only include JSON waypoints that are at or after the earliest FIT waypoint
+		// Only include JSON waypoints that are after the latest FIT waypoint
 		for _, wp := range jsonWaypoints {
-			if wp.Timestamp.After(earliestFitTime) || wp.Timestamp.Equal(earliestFitTime) {
+			if wp.Timestamp.After(latestFitTime) {
 				allWaypoints = append(allWaypoints, wp)
 			}
 		}
