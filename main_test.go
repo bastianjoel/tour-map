@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -209,4 +212,117 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+func TestHandleUpdates(t *testing.T) {
+	// Create test app
+	app := &App{
+		waypoints:      make([]Waypoint, 0),
+		imageLocations: make(map[string]GPSCoords),
+		codes:          make(map[string]struct{}),
+	}
+
+	// Add test waypoints
+	baseTime := time.Date(2023, 12, 1, 10, 0, 0, 0, time.UTC)
+	app.waypoints = []Waypoint{
+		{
+			Location:  &GPSCoords{Latitude: 40.7128, Longitude: -74.0060},
+			Timestamp: baseTime,
+		},
+		{
+			Location:  &GPSCoords{Latitude: 40.7200, Longitude: -74.0070},
+			Timestamp: baseTime.Add(time.Hour),
+		},
+	}
+
+	// Add test image
+	app.imageLocations["test.jpg"] = GPSCoords{Latitude: 40.7150, Longitude: -74.0065}
+
+	tests := []struct {
+		name             string
+		sinceParam       string
+		expectedStatus   int
+		expectedWaypoints int
+		expectedImages   int
+	}{
+		{
+			name:             "no since parameter - returns all waypoints",
+			sinceParam:       "",
+			expectedStatus:   http.StatusOK,
+			expectedWaypoints: 2,
+			expectedImages:   1,
+		},
+		{
+			name:             "since before all waypoints - returns all",
+			sinceParam:       "2023-12-01T09:00:00Z",
+			expectedStatus:   http.StatusOK,
+			expectedWaypoints: 2,
+			expectedImages:   1,
+		},
+		{
+			name:             "since between waypoints - returns only newer",
+			sinceParam:       "2023-12-01T10:30:00Z",
+			expectedStatus:   http.StatusOK,
+			expectedWaypoints: 1,
+			expectedImages:   1,
+		},
+		{
+			name:             "since after all waypoints - returns none",
+			sinceParam:       "2023-12-01T12:00:00Z",
+			expectedStatus:   http.StatusOK,
+			expectedWaypoints: 0,
+			expectedImages:   1,
+		},
+		{
+			name:           "invalid timestamp format",
+			sinceParam:     "invalid-timestamp",
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			url := "/api/updates"
+			if tt.sinceParam != "" {
+				url += "?since=" + tt.sinceParam
+			}
+			
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			rr := httptest.NewRecorder()
+			handler := http.HandlerFunc(app.handleUpdates)
+
+			handler.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tt.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v", status, tt.expectedStatus)
+			}
+
+			if tt.expectedStatus == http.StatusOK {
+				var response UpdateResponse
+				err := json.Unmarshal(rr.Body.Bytes(), &response)
+				if err != nil {
+					t.Errorf("failed to unmarshal response: %v", err)
+					return
+				}
+
+				if len(response.Waypoints) != tt.expectedWaypoints {
+					t.Errorf("expected %d waypoints, got %d", tt.expectedWaypoints, len(response.Waypoints))
+				}
+
+				if len(response.Images) != tt.expectedImages {
+					t.Errorf("expected %d images, got %d", tt.expectedImages, len(response.Images))
+				}
+
+				// Verify Content-Type header
+				expectedContentType := "application/json"
+				if contentType := rr.Header().Get("Content-Type"); contentType != expectedContentType {
+					t.Errorf("expected Content-Type %s, got %s", expectedContentType, contentType)
+				}
+			}
+		})
+	}
 }
