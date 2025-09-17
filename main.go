@@ -407,6 +407,13 @@ func (app *App) periodicWaypointScan() {
 	}
 }
 
+// UpdateResponse represents the API response for incremental updates
+type UpdateResponse struct {
+	Waypoints    [][]float64            `json:"waypoints"`
+	Images       map[string][]float64   `json:"images"`
+	LastModified time.Time              `json:"lastModified"`
+}
+
 // Setup HTTP server routes
 func (app *App) setupHTTPServer() {
 	// Serve static files from /images with cache control headers
@@ -415,6 +422,9 @@ func (app *App) setupHTTPServer() {
 		w.Header().Set("Cache-Control", "public, max-age=259200")
 		imageHandler.ServeHTTP(w, r)
 	}))
+
+	// API endpoint for incremental updates
+	http.HandleFunc("/api/updates", app.handleUpdates)
 
 	// Main index page
 	http.HandleFunc("/", app.handleIndex)
@@ -470,6 +480,103 @@ func pruneWaypoints(waypoints []Waypoint) []Waypoint {
 	}
 
 	return prunedWaypoints
+}
+
+// Handle API endpoint for incremental updates
+func (app *App) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	// Parse 'since' timestamp parameter
+	sinceParam := r.URL.Query().Get("since")
+	var since time.Time
+	var err error
+	
+	if sinceParam != "" {
+		since, err = time.Parse(time.RFC3339, sinceParam)
+		if err != nil {
+			http.Error(w, "Invalid 'since' timestamp format, use RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Get code for access control (same logic as main page)
+	code := r.URL.Query().Get("code")
+	app.codesMutex.RLock()
+	_, hasValidCode := app.codes[code]
+	app.codesMutex.RUnlock()
+
+	app.wpMutex.RLock()
+	var waypoints [][]float64
+	var lastModified time.Time
+	
+	// Apply 10km restriction if user doesn't have a valid code (same logic as main page)
+	if hasValidCode {
+		// Return all waypoints if user has valid access code
+		waypoints = make([][]float64, 0, len(app.waypoints))
+		for _, wp := range app.waypoints {
+			if sinceParam == "" || wp.Timestamp.After(since) {
+				waypoints = append(waypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
+			}
+		}
+		if len(app.waypoints) > 0 {
+			lastModified = app.waypoints[len(app.waypoints)-1].Timestamp
+		}
+	} else {
+		// Apply 10km restriction for users without valid access code
+		allWaypoints := make([][]float64, 0, len(app.waypoints))
+		for _, wp := range app.waypoints {
+			allWaypoints = append(allWaypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
+		}
+		
+		if len(allWaypoints) > 0 {
+			lastWaypoint := allWaypoints[len(allWaypoints)-1]
+			i := len(allWaypoints) - 1
+			for ; i >= 0; i-- {
+				if distanceKm(lastWaypoint[0], lastWaypoint[1], allWaypoints[i][0], allWaypoints[i][1]) > 10.0 {
+					break
+				}
+			}
+			// i+1 is the count of waypoints to keep (all waypoints within 10km from the end)
+			keepCount := i + 1
+			if keepCount <= 0 {
+				// All waypoints are within 10km, keep them all
+				keepCount = len(allWaypoints)
+			}
+			
+			restrictedWaypoints := allWaypoints[:keepCount]
+			
+			// Filter by 'since' timestamp
+			for j, wp := range app.waypoints[:keepCount] {
+				if sinceParam == "" || wp.Timestamp.After(since) {
+					waypoints = append(waypoints, restrictedWaypoints[j])
+				}
+			}
+			if len(app.waypoints) > 0 && keepCount > 0 {
+				lastModified = app.waypoints[keepCount-1].Timestamp
+			}
+		}
+	}
+	app.wpMutex.RUnlock()
+
+	// Get images (images don't have timestamps, so return all new ones based on comparison)
+	app.imagesMutex.RLock()
+	imageData := make(map[string][]float64)
+	for filename, coords := range app.imageLocations {
+		imageData[filename] = []float64{coords.Latitude, coords.Longitude}
+	}
+	app.imagesMutex.RUnlock()
+
+	response := UpdateResponse{
+		Waypoints:    waypoints,
+		Images:       imageData,
+		LastModified: lastModified,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 // Handle main index page
