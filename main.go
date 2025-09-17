@@ -19,10 +19,12 @@ import (
 	"time"
 
 	"github.com/rwcarlsen/goexif/exif"
+	"github.com/tormoder/fit"
 )
 
 const dataDir = "./data"
 const imagesDir = "./images"
+const fitDir = "./fit"
 const trackingTokenFile = "./tracking_token.txt"
 const codesFile = "./codes.txt"
 
@@ -59,8 +61,9 @@ func main() {
 		codes:          make(map[string]struct{}),
 	}
 
-	// Create data dir if not exists
+	// Create directories if they don't exist
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
 
 	// Initial data load
 	app.loadWaypoints()
@@ -78,9 +81,10 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-// Load all JSON files from /data directory
+// Load all JSON files from /data directory and FIT files from /fit directory
 func (app *App) loadWaypoints() {
-	nextPathData := make([]Waypoint, 0)
+	// Load JSON waypoints from data directory
+	jsonWaypoints := make([]Waypoint, 0)
 
 	err := filepath.WalkDir(dataDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -101,7 +105,7 @@ func (app *App) loadWaypoints() {
 			}
 
 			if wp.Location != nil {
-				nextPathData = append(nextPathData, wp)
+				jsonWaypoints = append(jsonWaypoints, wp)
 			}
 		}
 
@@ -112,21 +116,114 @@ func (app *App) loadWaypoints() {
 		log.Printf("Error walking data directory: %v", err)
 	}
 
-	slices.SortFunc(nextPathData, func(a, b Waypoint) int {
+	// Load FIT waypoints from fit directory
+	fitWaypoints := make([]Waypoint, 0)
+
+	// Check if fit directory exists first
+	if _, err := os.Stat(fitDir); !os.IsNotExist(err) {
+		err := filepath.WalkDir(fitDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".fit") {
+				waypoints, err := app.parseFitFile(path)
+				if err != nil {
+					log.Printf("Error parsing FIT file %s: %v", path, err)
+					return nil
+				}
+
+				fitWaypoints = append(fitWaypoints, waypoints...)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("Error walking fit directory: %v", err)
+		}
+	}
+
+	// Combine and filter waypoints
+	allWaypoints := make([]Waypoint, 0, len(jsonWaypoints)+len(fitWaypoints))
+	
+	// If FIT waypoints exist, filter out JSON waypoints that are before or equal to the latest FIT waypoint
+	if len(fitWaypoints) > 0 {
+		// Sort FIT waypoints first to find latest
+		slices.SortFunc(fitWaypoints, func(a, b Waypoint) int {
+			return a.Timestamp.Compare(b.Timestamp)
+		})
+		
+		latestFitTime := fitWaypoints[len(fitWaypoints)-1].Timestamp
+		
+		// Only include JSON waypoints that are after the latest FIT waypoint
+		for _, wp := range jsonWaypoints {
+			if wp.Timestamp.After(latestFitTime) {
+				allWaypoints = append(allWaypoints, wp)
+			}
+		}
+		allWaypoints = append(allWaypoints, fitWaypoints...)
+	} else {
+		allWaypoints = append(allWaypoints, jsonWaypoints...)
+	}
+
+	// Sort all waypoints by timestamp
+	slices.SortFunc(allWaypoints, func(a, b Waypoint) int {
 		return a.Timestamp.Compare(b.Timestamp)
 	})
 
-	if len(nextPathData) > 0 {
-		latest := nextPathData[len(nextPathData)-1].Timestamp
+	if len(allWaypoints) > 0 {
+		latest := allWaypoints[len(allWaypoints)-1].Timestamp
 		app.latestWaypoint = &latest
 	}
 
-	log.Printf("Loaded %d JSON files", len(nextPathData))
+	log.Printf("Loaded %d JSON files, %d FIT waypoints, %d total waypoints", len(jsonWaypoints), len(fitWaypoints), len(allWaypoints))
 
 	app.wpMutex.Lock()
 	defer app.wpMutex.Unlock()
 
-	app.waypoints = nextPathData
+	app.waypoints = allWaypoints
+}
+
+// Parse a single FIT file and extract waypoints
+func (app *App) parseFitFile(path string) ([]Waypoint, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	fitFile, err := fit.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+
+	waypoints := make([]Waypoint, 0)
+
+	// Extract track points from the FIT file
+	activity, err := fitFile.Activity()
+	if err != nil {
+		return nil, err
+	}
+
+	// Process all record messages directly from the activity file
+	for _, record := range activity.Records {
+		if !record.PositionLat.Invalid() && !record.PositionLong.Invalid() {
+			lat := record.PositionLat.Degrees()
+			lng := record.PositionLong.Degrees()
+
+			waypoint := Waypoint{
+				Location: &GPSCoords{
+					Latitude:  lat,
+					Longitude: lng,
+				},
+				Timestamp: record.Timestamp,
+			}
+			waypoints = append(waypoints, waypoint)
+		}
+	}
+
+	return waypoints, nil
 }
 
 // Scan images directory for GPS coordinates
@@ -359,7 +456,7 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		lastWaypoint := waypoints[len(waypoints)-1]
 		i := len(waypoints) - 1
 		for ; i >= 0; i-- {
-			// if distance is more than 1km, break
+			// if distance is more than 10km, break
 			if distanceKm(lastWaypoint[0], lastWaypoint[1], waypoints[i][0], waypoints[i][1]) > 10.0 {
 				break
 			}
