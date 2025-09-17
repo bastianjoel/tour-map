@@ -31,11 +31,16 @@
       maxZoom: 19,
       attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
+    
+    // Create canvas renderer for better performance with polylines
+    const canvasRenderer = L.canvas();
+    
     const path = L.featureGroup();
     const positions = JSON.parse(document.getElementById('tour-data').textContent || '[]');
     for (let i = 1; i < positions.length; i++) {
       L.polyline([positions[i - 1], positions[i]], {
-        color: "red"
+        color: "red",
+        renderer: canvasRenderer
       }).addTo(path);
     }
 
@@ -67,7 +72,8 @@
             path.clearLayers();
             for (let i = 1; i < newPositions.length; i++) {
               L.polyline([newPositions[i - 1], newPositions[i]], {
-                color: "red"
+                color: "red",
+                renderer: canvasRenderer
               }).addTo(path);
             }
           }
