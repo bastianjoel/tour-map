@@ -446,7 +446,7 @@ func pruneWaypoints(waypoints []Waypoint) []Waypoint {
 		return waypoints
 	}
 
-	const minDistanceKm = 0.005 // 5 meters in kilometers
+	const minDistanceKm = 0.02 // 20 meters in kilometers
 
 	prunedWaypoints := make([]Waypoint, 0, len(waypoints))
 	prunedWaypoints = append(prunedWaypoints, waypoints[0]) // Always keep the first waypoint
