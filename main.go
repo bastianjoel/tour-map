@@ -142,6 +142,15 @@ func (app *App) loadWaypoints() {
 func (app *App) loadFitWaypoints() {
 	nextFitData := make([]Waypoint, 0)
 
+	// Check if fit directory exists first
+	if _, err := os.Stat(fitDir); os.IsNotExist(err) {
+		log.Printf("FIT directory %s does not exist, skipping FIT file loading", fitDir)
+		app.fitMutex.Lock()
+		defer app.fitMutex.Unlock()
+		app.fitWaypoints = nextFitData
+		return
+	}
+
 	err := filepath.WalkDir(fitDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -492,7 +501,7 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		lastWaypoint := waypoints[len(waypoints)-1]
 		i := len(waypoints) - 1
 		for ; i >= 0; i-- {
-			// if distance is more than 1km, break
+			// if distance is more than 10km, break
 			if distanceKm(lastWaypoint[0], lastWaypoint[1], waypoints[i][0], waypoints[i][1]) > 10.0 {
 				break
 			}
