@@ -19,10 +19,12 @@ import (
 	"time"
 
 	"github.com/rwcarlsen/goexif/exif"
+	"github.com/tormoder/fit"
 )
 
 const dataDir = "./data"
 const imagesDir = "./images"
+const fitDir = "./fit"
 const trackingTokenFile = "./tracking_token.txt"
 const codesFile = "./codes.txt"
 
@@ -43,32 +45,39 @@ type Waypoint struct {
 
 // Application state
 type App struct {
-	latestWaypoint *time.Time
-	waypoints      []Waypoint
-	imageLocations map[string]GPSCoords
-	wpMutex        sync.RWMutex
-	imagesMutex    sync.RWMutex
-	codesMutex     sync.RWMutex
-	codes          map[string]struct{}
+	latestWaypoint    *time.Time
+	latestFitWaypoint *time.Time
+	waypoints         []Waypoint
+	fitWaypoints      []Waypoint
+	imageLocations    map[string]GPSCoords
+	wpMutex           sync.RWMutex
+	fitMutex          sync.RWMutex
+	imagesMutex       sync.RWMutex
+	codesMutex        sync.RWMutex
+	codes             map[string]struct{}
 }
 
 func main() {
 	app := &App{
 		waypoints:      make([]Waypoint, 0),
+		fitWaypoints:   make([]Waypoint, 0),
 		imageLocations: make(map[string]GPSCoords),
 		codes:          make(map[string]struct{}),
 	}
 
-	// Create data dir if not exists
+	// Create directories if they don't exist
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
 
 	// Initial data load
 	app.loadWaypoints()
+	app.loadFitWaypoints()
 	app.scanImages()
 
 	// Start periodic updates
 	go app.periodicImageScan()
 	go app.periodicWaypointScan()
+	go app.periodicFitScan()
 
 	// Setup HTTP server
 	app.setupHTTPServer()
@@ -127,6 +136,100 @@ func (app *App) loadWaypoints() {
 	defer app.wpMutex.Unlock()
 
 	app.waypoints = nextPathData
+}
+
+// Load all FIT files from /fit directory
+func (app *App) loadFitWaypoints() {
+	nextFitData := make([]Waypoint, 0)
+
+	err := filepath.WalkDir(fitDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".fit") {
+			waypoints, err := app.parseFitFile(path)
+			if err != nil {
+				log.Printf("Error parsing FIT file %s: %v", path, err)
+				return nil
+			}
+
+			nextFitData = append(nextFitData, waypoints...)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("Error walking fit directory: %v", err)
+	}
+
+	slices.SortFunc(nextFitData, func(a, b Waypoint) int {
+		return a.Timestamp.Compare(b.Timestamp)
+	})
+
+	if len(nextFitData) > 0 {
+		latest := nextFitData[len(nextFitData)-1].Timestamp
+		app.latestFitWaypoint = &latest
+	}
+
+	log.Printf("Loaded %d FIT waypoints", len(nextFitData))
+
+	app.fitMutex.Lock()
+	defer app.fitMutex.Unlock()
+
+	app.fitWaypoints = nextFitData
+}
+
+// Parse a single FIT file and extract waypoints
+func (app *App) parseFitFile(path string) ([]Waypoint, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	fitFile, err := fit.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+
+	waypoints := make([]Waypoint, 0)
+
+	// Extract track points from the FIT file
+	activity, err := fitFile.Activity()
+	if err != nil {
+		return nil, err
+	}
+
+	// Process all record messages directly from the activity file
+	for _, record := range activity.Records {
+		if !record.PositionLat.Invalid() && !record.PositionLong.Invalid() {
+			lat := record.PositionLat.Degrees()
+			lng := record.PositionLong.Degrees()
+
+			waypoint := Waypoint{
+				Location: &GPSCoords{
+					Latitude:  lat,
+					Longitude: lng,
+				},
+				Timestamp: record.Timestamp,
+			}
+			waypoints = append(waypoints, waypoint)
+		}
+	}
+
+	return waypoints, nil
+}
+
+// Periodic FIT file scanning
+func (app *App) periodicFitScan() {
+	ticker := time.NewTicker(60 * time.Second) // Check every minute
+	defer ticker.Stop()
+
+	for range ticker.C {
+		app.loadFitWaypoints()
+	}
 }
 
 // Scan images directory for GPS coordinates
@@ -346,12 +449,42 @@ func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	maps.Copy(images, app.imageLocations)
 	app.imagesMutex.RUnlock()
 	
+	// Combine waypoints from data and FIT files
 	app.wpMutex.RLock()
-	waypoints := make([][]float64, 0, len(app.waypoints))
-	for _, wp := range app.waypoints {
+	dataWaypoints := make([]Waypoint, len(app.waypoints))
+	copy(dataWaypoints, app.waypoints)
+	app.wpMutex.RUnlock()
+
+	app.fitMutex.RLock()
+	fitWaypoints := make([]Waypoint, len(app.fitWaypoints))
+	copy(fitWaypoints, app.fitWaypoints)
+	app.fitMutex.RUnlock()
+
+	// Combine and filter waypoints
+	allWaypoints := make([]Waypoint, 0, len(dataWaypoints)+len(fitWaypoints))
+	
+	// If FIT waypoints exist, filter out data waypoints that are before the earliest FIT waypoint
+	if len(fitWaypoints) > 0 {
+		earliestFitTime := fitWaypoints[0].Timestamp
+		for _, wp := range dataWaypoints {
+			if wp.Timestamp.After(earliestFitTime) || wp.Timestamp.Equal(earliestFitTime) {
+				allWaypoints = append(allWaypoints, wp)
+			}
+		}
+		allWaypoints = append(allWaypoints, fitWaypoints...)
+	} else {
+		allWaypoints = append(allWaypoints, dataWaypoints...)
+	}
+
+	// Sort combined waypoints by timestamp
+	slices.SortFunc(allWaypoints, func(a, b Waypoint) int {
+		return a.Timestamp.Compare(b.Timestamp)
+	})
+
+	waypoints := make([][]float64, 0, len(allWaypoints))
+	for _, wp := range allWaypoints {
 		waypoints = append(waypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
 	}
-	app.wpMutex.RUnlock()
 
 	code := r.URL.Query().Get("code")
 	app.codesMutex.RLock()
