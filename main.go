@@ -500,15 +500,16 @@ func (app *App) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	// Get code for access control (same logic as main page)
 	code := r.URL.Query().Get("code")
 	app.codesMutex.RLock()
-	hasAccess := len(app.codes) == 0 || app.codes[code] != struct{}{}
+	_, hasValidCode := app.codes[code]
 	app.codesMutex.RUnlock()
 
 	app.wpMutex.RLock()
 	var waypoints [][]float64
 	var lastModified time.Time
 	
-	if hasAccess {
-		// Return all waypoints if user has access
+	// Apply 10km restriction if user doesn't have a valid code (same logic as main page)
+	if hasValidCode {
+		// Return all waypoints if user has valid access code
 		waypoints = make([][]float64, 0, len(app.waypoints))
 		for _, wp := range app.waypoints {
 			if sinceParam == "" || wp.Timestamp.After(since) {
@@ -519,7 +520,7 @@ func (app *App) handleUpdates(w http.ResponseWriter, r *http.Request) {
 			lastModified = app.waypoints[len(app.waypoints)-1].Timestamp
 		}
 	} else {
-		// Apply 10km restriction for users without access
+		// Apply 10km restriction for users without valid access code
 		allWaypoints := make([][]float64, 0, len(app.waypoints))
 		for _, wp := range app.waypoints {
 			allWaypoints = append(allWaypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
@@ -533,20 +534,23 @@ func (app *App) handleUpdates(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-			restrictedWaypoints := allWaypoints[:i+1]
+			// i+1 is the count of waypoints to keep (all waypoints within 10km from the end)
+			keepCount := i + 1
+			if keepCount <= 0 {
+				// All waypoints are within 10km, keep them all
+				keepCount = len(allWaypoints)
+			}
+			
+			restrictedWaypoints := allWaypoints[:keepCount]
 			
 			// Filter by 'since' timestamp
-			for j, wp := range app.waypoints[:i+1] {
+			for j, wp := range app.waypoints[:keepCount] {
 				if sinceParam == "" || wp.Timestamp.After(since) {
 					waypoints = append(waypoints, restrictedWaypoints[j])
 				}
 			}
-			if len(app.waypoints) > 0 {
-				maxIndex := len(app.waypoints) - 1
-				if i < maxIndex {
-					maxIndex = i
-				}
-				lastModified = app.waypoints[maxIndex].Timestamp
+			if len(app.waypoints) > 0 && keepCount > 0 {
+				lastModified = app.waypoints[keepCount-1].Timestamp
 			}
 		}
 	}
