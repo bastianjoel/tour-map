@@ -36,60 +36,98 @@
     const canvasRenderer = L.canvas();
     
     const path = L.featureGroup();
-    const positions = JSON.parse(document.getElementById('tour-data').textContent || '[]');
-    for (let i = 1; i < positions.length; i++) {
-      L.polyline([positions[i - 1], positions[i]], {
-        color: "red",
-        renderer: canvasRenderer
-      }).addTo(path);
+    let positions = JSON.parse(document.getElementById('tour-data').textContent || '[]');
+    let images = JSON.parse(document.getElementById('image-data').textContent || '[]');
+    let lastUpdateTime = new Date().toISOString(); // Track last update time
+    
+    // Initialize map with existing data
+    function initializeMap() {
+      for (let i = 1; i < positions.length; i++) {
+        L.polyline([positions[i - 1], positions[i]], {
+          color: "red",
+          renderer: canvasRenderer
+        }).addTo(path);
+      }
+
+      path.addTo(map);
+      if (positions.length > 0) {
+        map.fitBounds(path.getBounds(), {
+          animate: false,
+          padding: [20, 20],
+        });
+      }
+
+      for (const [filename, coords] of Object.entries(images)) {
+        const marker = L.marker(coords).addTo(map);
+        marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
+      }
     }
 
-    path.addTo(map);
-    map.fitBounds(path.getBounds(), {
-      animate: false,
-      padding: [20, 20],
-    });
-
-    const images = JSON.parse(document.getElementById('image-data').textContent || '[]');
-    for (const [filename, coords] of Object.entries(images)) {
-      const marker = L.marker(coords).addTo(map);
-      marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
-    }
-
-    // Fetch page and update map every 30 seconds
+    // Optimized update function using the new API
     function updateMap() {
-      fetch(window.location.href)
-        .then(response => response.text())
-        .then(html => {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          const newTourData = doc.getElementById('tour-data').textContent;
-          const newImageData = doc.getElementById('image-data').textContent;
-
-          // Update path
-          const newPositions = JSON.parse(newTourData || '[]');
-          if (newPositions.length !== positions.length) {
-            path.clearLayers();
-            for (let i = 1; i < newPositions.length; i++) {
-              L.polyline([newPositions[i - 1], newPositions[i]], {
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code') || '';
+      const apiUrl = `/api/updates?since=${encodeURIComponent(lastUpdateTime)}&code=${encodeURIComponent(code)}`;
+      
+      fetch(apiUrl)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          // Update waypoints if there are new ones
+          if (data.waypoints && data.waypoints.length > 0) {
+            const oldLength = positions.length;
+            
+            // Add new waypoints to existing positions
+            positions = positions.concat(data.waypoints);
+            
+            // Add new polylines to the map
+            for (let i = Math.max(1, oldLength); i < positions.length; i++) {
+              L.polyline([positions[i - 1], positions[i]], {
                 color: "red",
                 renderer: canvasRenderer
               }).addTo(path);
             }
-          }
-
-          // Update images
-          const newImages = JSON.parse(newImageData || '[]');
-          for (const [filename, coords] of Object.entries(newImages)) {
-            if (!images.hasOwnProperty(filename)) {
-              const marker = L.marker(coords).addTo(map);
-              marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
+            
+            // Update map bounds if we have new waypoints
+            if (positions.length > 0) {
+              map.fitBounds(path.getBounds(), {
+                animate: false,
+                padding: [20, 20],
+              });
             }
           }
+
+          // Update images - only add new ones
+          if (data.images) {
+            for (const [filename, coords] of Object.entries(data.images)) {
+              if (!images.hasOwnProperty(filename)) {
+                const marker = L.marker(coords).addTo(map);
+                marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
+                images[filename] = coords;
+              }
+            }
+          }
+
+          // Update the last update time
+          if (data.lastModified) {
+            lastUpdateTime = data.lastModified;
+          }
         })
-        .catch(error => console.error('Error fetching updated data:', error));
+        .catch(error => {
+          console.error('Error fetching updated data:', error);
+          // Fallback to full page refresh on error
+          location.reload();
+        });
     }
 
-    setInterval(updateMap, 30000); // Update every 30 seconds
+    // Initialize the map
+    initializeMap();
+
+    // Update every 30 seconds
+    setInterval(updateMap, 30000);
   </script>
 </html>

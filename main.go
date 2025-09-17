@@ -407,6 +407,13 @@ func (app *App) periodicWaypointScan() {
 	}
 }
 
+// UpdateResponse represents the API response for incremental updates
+type UpdateResponse struct {
+	Waypoints    [][]float64            `json:"waypoints"`
+	Images       map[string][]float64   `json:"images"`
+	LastModified time.Time              `json:"lastModified"`
+}
+
 // Setup HTTP server routes
 func (app *App) setupHTTPServer() {
 	// Serve static files from /images with cache control headers
@@ -415,6 +422,9 @@ func (app *App) setupHTTPServer() {
 		w.Header().Set("Cache-Control", "public, max-age=259200")
 		imageHandler.ServeHTTP(w, r)
 	}))
+
+	// API endpoint for incremental updates
+	http.HandleFunc("/api/updates", app.handleUpdates)
 
 	// Main index page
 	http.HandleFunc("/", app.handleIndex)
@@ -470,6 +480,99 @@ func pruneWaypoints(waypoints []Waypoint) []Waypoint {
 	}
 
 	return prunedWaypoints
+}
+
+// Handle API endpoint for incremental updates
+func (app *App) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	// Parse 'since' timestamp parameter
+	sinceParam := r.URL.Query().Get("since")
+	var since time.Time
+	var err error
+	
+	if sinceParam != "" {
+		since, err = time.Parse(time.RFC3339, sinceParam)
+		if err != nil {
+			http.Error(w, "Invalid 'since' timestamp format, use RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Get code for access control (same logic as main page)
+	code := r.URL.Query().Get("code")
+	app.codesMutex.RLock()
+	hasAccess := len(app.codes) == 0 || app.codes[code] != struct{}{}
+	app.codesMutex.RUnlock()
+
+	app.wpMutex.RLock()
+	var waypoints [][]float64
+	var lastModified time.Time
+	
+	if hasAccess {
+		// Return all waypoints if user has access
+		waypoints = make([][]float64, 0, len(app.waypoints))
+		for _, wp := range app.waypoints {
+			if sinceParam == "" || wp.Timestamp.After(since) {
+				waypoints = append(waypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
+			}
+		}
+		if len(app.waypoints) > 0 {
+			lastModified = app.waypoints[len(app.waypoints)-1].Timestamp
+		}
+	} else {
+		// Apply 10km restriction for users without access
+		allWaypoints := make([][]float64, 0, len(app.waypoints))
+		for _, wp := range app.waypoints {
+			allWaypoints = append(allWaypoints, []float64{wp.Location.Latitude, wp.Location.Longitude})
+		}
+		
+		if len(allWaypoints) > 0 {
+			lastWaypoint := allWaypoints[len(allWaypoints)-1]
+			i := len(allWaypoints) - 1
+			for ; i >= 0; i-- {
+				if distanceKm(lastWaypoint[0], lastWaypoint[1], allWaypoints[i][0], allWaypoints[i][1]) > 10.0 {
+					break
+				}
+			}
+			restrictedWaypoints := allWaypoints[:i+1]
+			
+			// Filter by 'since' timestamp
+			for j, wp := range app.waypoints[:i+1] {
+				if sinceParam == "" || wp.Timestamp.After(since) {
+					waypoints = append(waypoints, restrictedWaypoints[j])
+				}
+			}
+			if len(app.waypoints) > 0 {
+				maxIndex := len(app.waypoints) - 1
+				if i < maxIndex {
+					maxIndex = i
+				}
+				lastModified = app.waypoints[maxIndex].Timestamp
+			}
+		}
+	}
+	app.wpMutex.RUnlock()
+
+	// Get images (images don't have timestamps, so return all new ones based on comparison)
+	app.imagesMutex.RLock()
+	imageData := make(map[string][]float64)
+	for filename, coords := range app.imageLocations {
+		imageData[filename] = []float64{coords.Latitude, coords.Longitude}
+	}
+	app.imagesMutex.RUnlock()
+
+	response := UpdateResponse{
+		Waypoints:    waypoints,
+		Images:       imageData,
+		LastModified: lastModified,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 // Handle main index page
