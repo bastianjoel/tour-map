@@ -172,17 +172,20 @@ func (app *App) loadWaypoints() {
 		return a.Timestamp.Compare(b.Timestamp)
 	})
 
-	if len(allWaypoints) > 0 {
-		latest := allWaypoints[len(allWaypoints)-1].Timestamp
+	// Prune waypoints to remove consecutive waypoints less than 5 meters apart
+	prunedWaypoints := pruneWaypoints(allWaypoints)
+
+	if len(prunedWaypoints) > 0 {
+		latest := prunedWaypoints[len(prunedWaypoints)-1].Timestamp
 		app.latestWaypoint = &latest
 	}
 
-	log.Printf("Loaded %d JSON files, %d FIT waypoints, %d total waypoints", len(jsonWaypoints), len(fitWaypoints), len(allWaypoints))
+	log.Printf("Loaded %d JSON files, %d FIT waypoints, %d total waypoints, %d after pruning", len(jsonWaypoints), len(fitWaypoints), len(allWaypoints), len(prunedWaypoints))
 
 	app.wpMutex.Lock()
 	defer app.wpMutex.Unlock()
 
-	app.waypoints = allWaypoints
+	app.waypoints = prunedWaypoints
 }
 
 // Parse a single FIT file and extract waypoints
@@ -434,6 +437,39 @@ func distanceKm(lat1, lon1, lat2, lon2 float64) float64 {
 
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return R * c
+}
+
+// pruneWaypoints removes consecutive waypoints that are less than 5 meters apart
+// while ensuring at least one waypoint is retained in each closely clustered group
+func pruneWaypoints(waypoints []Waypoint) []Waypoint {
+	if len(waypoints) <= 1 {
+		return waypoints
+	}
+
+	const minDistanceKm = 0.005 // 5 meters in kilometers
+
+	prunedWaypoints := make([]Waypoint, 0, len(waypoints))
+	prunedWaypoints = append(prunedWaypoints, waypoints[0]) // Always keep the first waypoint
+
+	for i := 1; i < len(waypoints); i++ {
+		currentWaypoint := waypoints[i]
+		lastKeptWaypoint := prunedWaypoints[len(prunedWaypoints)-1]
+
+		// Calculate distance between current waypoint and the last kept waypoint
+		distance := distanceKm(
+			lastKeptWaypoint.Location.Latitude,
+			lastKeptWaypoint.Location.Longitude,
+			currentWaypoint.Location.Latitude,
+			currentWaypoint.Location.Longitude,
+		)
+
+		// Keep waypoint if distance is 5 meters or more
+		if distance >= minDistanceKm {
+			prunedWaypoints = append(prunedWaypoints, currentWaypoint)
+		}
+	}
+
+	return prunedWaypoints
 }
 
 // Handle main index page

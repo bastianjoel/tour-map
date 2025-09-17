@@ -2,7 +2,10 @@ module tour-map
 
 go 1.24.6
 
-require github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
+require (
+	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
+	github.com/tormoder/fit v0.15.0
+)
 
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect
@@ -11,7 +14,6 @@ require (
 	github.com/gordonklaus/ineffassign v0.0.0-20210914165742-4cc7213b9bc8 // indirect
 	github.com/kisielk/errcheck v1.6.1 // indirect
 	github.com/mdempsky/unconvert v0.0.0-20230125054757-2661c2c99a9b // indirect
-	github.com/tormoder/fit v0.15.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20221208152030-732eee02a75a // indirect
 	golang.org/x/mod v0.7.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
