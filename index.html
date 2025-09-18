@@ -91,14 +91,6 @@
                 renderer: canvasRenderer
               }).addTo(path);
             }
-            
-            // Update map bounds if we have new waypoints
-            if (positions.length > 0) {
-              map.fitBounds(path.getBounds(), {
-                animate: false,
-                padding: [20, 20],
-              });
-            }
           }
 
           // Update images - only add new ones
