@@ -5,38 +5,38 @@ import (
 )
 
 const (
-	// DefaultMaxDistanceKm is the maximum distance between consecutive points before starting a new trip.
+	// DefaultMaxDistanceKm is the default maximum distance between points before splitting into a new segment (10km).
 	DefaultMaxDistanceKm = 10.0
 
-	// DefaultMaxTimeGap is the maximum time gap between consecutive points before starting a new trip (7 days).
+	// DefaultDottedPauseDistanceKm is the distance threshold (>2.0km) within a single FIT activity
+	// where pauses/gaps are connected via dotted lines.
+	DefaultDottedPauseDistanceKm = 2.0
+
+	// DefaultMaxTimeGap is the default maximum time duration between points before splitting into a new segment (7 days).
 	DefaultMaxTimeGap = 7 * 24 * time.Hour
 
-	// DefaultPrivacyRadiusKm is the radius within the latest waypoint that is hidden without authorization.
+	// DefaultPrivacyRadiusKm is the radius (10km) around the latest live location trimmed when unauthorized.
 	DefaultPrivacyRadiusKm = 10.0
-
-	// DefaultDottedPauseDistanceKm is the threshold (>2km) for pauses/gaps within a single FIT activity to be connected via dotted lines.
-	DefaultDottedPauseDistanceKm = 2.0
 )
 
-// PathLine represents a continuous sub-path that is either "solid" (regular ride) or "dotted" (gaps/pauses > 2km within a FIT activity).
+// PathLine represents a contiguous line of coordinates with a render type ("solid" or "dotted").
 type PathLine struct {
-	Type   string       `json:"type"` // "solid" or "dotted"
-	Coords [][2]float64 `json:"coords"`
+	Type   string       `json:"type"`   // "solid" or "dotted"
+	Coords [][2]float64 `json:"coords"` // [lat, lng] pairs
 }
 
-// Segment represents a distinct connected trip segment with its timeframe, sub-lines, and full coordinates list.
+// Segment represents a distinct trip segment with start/end time and rendering path lines.
 type Segment struct {
 	ID        int          `json:"id"`
 	StartTime time.Time    `json:"startTime"`
 	EndTime   time.Time    `json:"endTime"`
-	Lines     []PathLine   `json:"lines"`
-	Coords    [][2]float64 `json:"coords"`
+	Lines     []PathLine   `json:"lines,omitempty"`
+	Coords    [][2]float64 `json:"coords"` // Flattened coordinates for bounding box calculation
 }
 
-// SegmentWaypoints splits a chronological slice of waypoints into trip segments.
-//   - Points originating from the SAME single FIT activity (matching non-empty ActivityID) are always kept in the same segment.
-//     If a pause/gap between consecutive points in that activity exceeds DefaultDottedPauseDistanceKm (2km), they are connected via a "dotted" line.
-//   - Points from different sources/activities separated by >maxDistanceKm or >maxTimeGap are split into separate trip segments.
+// SegmentWaypoints partitions a chronologically sorted slice of waypoints into distinct trip segments.
+// - Points from the same FIT activity are connected, rendering gaps > 2km as dotted lines.
+// - Points from different activities or live tracking that are > maxDistanceKm or > maxTimeGap apart start a new segment.
 func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap time.Duration) []Segment {
 	var validWaypoints []Waypoint
 	for _, wp := range waypoints {
@@ -60,23 +60,20 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 	var currentCoords [][2]float64
 	var currentLines []PathLine
 	var currentSolidLine [][2]float64
-	var currentStart time.Time
-	var currentEnd time.Time
+	var currentStart, currentEnd time.Time
 	segmentID := 0
 
 	flushCurrentSegment := func() {
-		if len(currentSolidLine) >= 2 {
-			currentLines = append(currentLines, PathLine{
-				Type:   "solid",
-				Coords: currentSolidLine,
-			})
-		}
 		if len(currentCoords) > 0 {
-			// If there were points but no lines with >=2 points (e.g. single point), create a solid line
-			if len(currentLines) == 0 && len(currentCoords) >= 2 {
+			if len(currentSolidLine) >= 2 {
 				currentLines = append(currentLines, PathLine{
 					Type:   "solid",
-					Coords: currentCoords,
+					Coords: currentSolidLine,
+				})
+			} else if len(currentSolidLine) == 1 && len(currentLines) == 0 {
+				currentLines = append(currentLines, PathLine{
+					Type:   "solid",
+					Coords: [][2]float64{currentSolidLine[0], currentSolidLine[0]},
 				})
 			}
 			segments = append(segments, Segment{
@@ -162,8 +159,9 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 	return segments
 }
 
-// FilterPrivacy trims waypoints within radiusKm of the last recorded waypoint
+// FilterPrivacy trims live tracking waypoints within radiusKm of the last recorded live tracking position
 // to protect real-time or home location privacy when no access code is provided.
+// Historical activity files (such as FIT files with ActivityID != "") are preserved and never trimmed.
 func FilterPrivacy(waypoints []Waypoint, radiusKm float64) []Waypoint {
 	if len(waypoints) == 0 {
 		return waypoints
@@ -173,36 +171,42 @@ func FilterPrivacy(waypoints []Waypoint, radiusKm float64) []Waypoint {
 		radiusKm = DefaultPrivacyRadiusKm
 	}
 
-	// Find the last waypoint with a valid location
-	var lastWp *Waypoint
+	// 1. Find the last live tracking waypoint (ActivityID == "") with a valid location
+	var lastLiveWp *Waypoint
 	for i := len(waypoints) - 1; i >= 0; i-- {
-		if waypoints[i].Location != nil {
-			lastWp = &waypoints[i]
+		if waypoints[i].ActivityID == "" && waypoints[i].Location != nil {
+			lastLiveWp = &waypoints[i]
 			break
 		}
 	}
 
-	if lastWp == nil {
+	// If there are no live tracking waypoints, do not trim anything
+	if lastLiveWp == nil {
 		return waypoints
 	}
 
-	i := len(waypoints) - 1
-	for ; i >= 0; i-- {
-		if waypoints[i].Location == nil {
+	// 2. Filter out live tracking points that are within radiusKm of the last live location
+	var filtered []Waypoint
+	for _, wp := range waypoints {
+		// Non-live waypoints (e.g. FIT files) are always kept intact
+		if wp.ActivityID != "" {
+			filtered = append(filtered, wp)
 			continue
 		}
-		dist := DistanceKm(
-			lastWp.Location.Latitude, lastWp.Location.Longitude,
-			waypoints[i].Location.Latitude, waypoints[i].Location.Longitude,
-		)
-		if dist > radiusKm {
-			break
+
+		// For live tracking: trim points within privacy radius of the latest live position
+		if wp.Location != nil {
+			dist := DistanceKm(
+				lastLiveWp.Location.Latitude, lastLiveWp.Location.Longitude,
+				wp.Location.Latitude, wp.Location.Longitude,
+			)
+			if dist <= radiusKm {
+				continue
+			}
 		}
+
+		filtered = append(filtered, wp)
 	}
 
-	if i < 0 {
-		return []Waypoint{}
-	}
-
-	return waypoints[:i+1]
+	return filtered
 }

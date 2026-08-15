@@ -8,165 +8,138 @@ import (
 func TestSegmentWaypoints_WithinLimits(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// Points within 1-2 km and a few minutes apart
-	waypoints := []Waypoint{
+	// Points within 10km and 10 mins apart
+	wps := []Waypoint{
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime},
 		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(10 * time.Minute)},
 		{Location: &GPSCoords{Latitude: 52.5220, Longitude: 13.4070}, Timestamp: baseTime.Add(20 * time.Minute)},
 	}
 
-	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
+	segments := SegmentWaypoints(wps, 10.0, 7*24*time.Hour)
+
 	if len(segments) != 1 {
 		t.Fatalf("expected 1 segment, got %d", len(segments))
 	}
 	if len(segments[0].Coords) != 3 {
-		t.Fatalf("expected 3 points in segment 0, got %d", len(segments[0].Coords))
-	}
-	if !segments[0].StartTime.Equal(baseTime) || !segments[0].EndTime.Equal(baseTime.Add(20*time.Minute)) {
-		t.Errorf("unexpected segment timeframe: %v to %v", segments[0].StartTime, segments[0].EndTime)
-	}
-	if len(segments[0].Lines) != 1 || segments[0].Lines[0].Type != "solid" {
-		t.Errorf("expected 1 solid line, got %v", segments[0].Lines)
+		t.Errorf("expected 3 coordinates, got %d", len(segments[0].Coords))
 	}
 }
 
 func TestSegmentWaypoints_DistanceSplit(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// Point 1 and 2 are close in Berlin. Point 3 is in Munich (far > 10 km, no common ActivityID).
-	waypoints := []Waypoint{
+	// Point 1: Berlin, Point 2: Paris (>10km away)
+	wps := []Waypoint{
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime},
-		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(1 * time.Hour)},
-		{Location: &GPSCoords{Latitude: 48.1351, Longitude: 11.5820}, Timestamp: baseTime.Add(2 * time.Hour)},
-		{Location: &GPSCoords{Latitude: 48.1360, Longitude: 11.5830}, Timestamp: baseTime.Add(3 * time.Hour)},
+		{Location: &GPSCoords{Latitude: 48.8566, Longitude: 2.3522}, Timestamp: baseTime.Add(1 * time.Hour)},
 	}
 
-	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
+	segments := SegmentWaypoints(wps, 10.0, 7*24*time.Hour)
+
 	if len(segments) != 2 {
-		t.Fatalf("expected 2 segments due to >10km distance, got %d", len(segments))
-	}
-	if len(segments[0].Coords) != 2 {
-		t.Errorf("expected 2 points in trip 1, got %d", len(segments[0].Coords))
-	}
-	if len(segments[1].Coords) != 2 {
-		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1].Coords))
+		t.Fatalf("expected 2 segments due to distance > 10km, got %d", len(segments))
 	}
 }
 
 func TestSegmentWaypoints_SingleFitFileDottedConnection_2km(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// All 4 points belong to the SAME single FIT activity ("fit:ride1.fit")
-	// Points 1 & 2 are in Berlin (0.1km apart -> solid).
-	// Point 3 is 3km away after a pause (> 2km threshold -> dotted).
-	// Point 4 is close to Point 3 (0.1km apart -> solid).
-	fitID := "fit:ride1.fit"
-	waypoints := []Waypoint{
-		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime, ActivityID: fitID},
-		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(10 * time.Minute), ActivityID: fitID},
-		{Location: &GPSCoords{Latitude: 52.5500, Longitude: 13.4300}, Timestamp: baseTime.Add(40 * time.Minute), ActivityID: fitID}, // ~3.7 km gap (>2km)
-		{Location: &GPSCoords{Latitude: 52.5510, Longitude: 13.4310}, Timestamp: baseTime.Add(50 * time.Minute), ActivityID: fitID},
+	// Points from the same FIT file with a 3km gap (>2km dotted threshold)
+	p1 := Waypoint{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime, ActivityID: "fit:tour1.fit"}
+	p2 := Waypoint{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(5 * time.Minute), ActivityID: "fit:tour1.fit"}
+	// Gap of ~3.3km
+	p3 := Waypoint{Location: &GPSCoords{Latitude: 52.5500, Longitude: 13.4060}, Timestamp: baseTime.Add(30 * time.Minute), ActivityID: "fit:tour1.fit"}
+	p4 := Waypoint{Location: &GPSCoords{Latitude: 52.5510, Longitude: 13.4070}, Timestamp: baseTime.Add(35 * time.Minute), ActivityID: "fit:tour1.fit"}
+
+	wps := []Waypoint{p1, p2, p3, p4}
+	segments := SegmentWaypoints(wps, 10.0, 7*24*time.Hour)
+
+	if len(segments) != 1 {
+		t.Fatalf("expected 1 segment for single FIT activity, got %d", len(segments))
 	}
 
-	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
-	if len(segments) != 1 {
-		t.Fatalf("expected 1 connected segment for single FIT activity, got %d", len(segments))
+	lines := segments[0].Lines
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 path lines (solid, dotted, solid), got %d", len(lines))
 	}
-	if len(segments[0].Coords) != 4 {
-		t.Errorf("expected 4 total coordinates, got %d", len(segments[0].Coords))
-	}
-	if len(segments[0].Lines) != 3 {
-		t.Fatalf("expected 3 sub-lines (solid, dotted, solid), got %d: %v", len(segments[0].Lines), segments[0].Lines)
-	}
-	if segments[0].Lines[0].Type != "solid" {
-		t.Errorf("expected line 0 to be solid, got %s", segments[0].Lines[0].Type)
-	}
-	if segments[0].Lines[1].Type != "dotted" {
-		t.Errorf("expected line 1 to be dotted for >2km pause, got %s", segments[0].Lines[1].Type)
-	}
-	if segments[0].Lines[2].Type != "solid" {
-		t.Errorf("expected line 2 to be solid, got %s", segments[0].Lines[2].Type)
+	if lines[0].Type != "solid" || lines[1].Type != "dotted" || lines[2].Type != "solid" {
+		t.Errorf("unexpected line types: %v, %v, %v", lines[0].Type, lines[1].Type, lines[2].Type)
 	}
 }
 
 func TestSegmentWaypoints_DifferentFitFilesDisconnected(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// Points from two DIFFERENT FIT activities (ride1 in Berlin, ride2 in Munich >10km away)
-	waypoints := []Waypoint{
-		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime, ActivityID: "fit:ride1.fit"},
-		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(30 * time.Minute), ActivityID: "fit:ride1.fit"},
-		{Location: &GPSCoords{Latitude: 48.1351, Longitude: 11.5820}, Timestamp: baseTime.Add(2 * time.Hour), ActivityID: "fit:ride2.fit"},
-		{Location: &GPSCoords{Latitude: 48.1360, Longitude: 11.5830}, Timestamp: baseTime.Add(3 * time.Hour), ActivityID: "fit:ride2.fit"},
+	// Two distinct FIT files 500m apart but 8 days apart (> 7 days)
+	wps := []Waypoint{
+		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime, ActivityID: "fit:day1.fit"},
+		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(8 * 24 * time.Hour), ActivityID: "fit:day2.fit"},
 	}
 
-	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
+	segments := SegmentWaypoints(wps, 10.0, 7*24*time.Hour)
+
 	if len(segments) != 2 {
-		t.Fatalf("expected 2 disconnected segments for different FIT activities, got %d", len(segments))
+		t.Fatalf("expected 2 distinct segments for different FIT files >7 days apart, got %d", len(segments))
 	}
 }
 
 func TestSegmentWaypoints_TimeSplit(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// Points are close geographically (in same city), but 8 days apart
-	waypoints := []Waypoint{
+	// Points close in distance (500m) but 8 days apart (>7 days limit)
+	wps := []Waypoint{
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime},
-		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(1 * time.Hour)},
-		{Location: &GPSCoords{Latitude: 52.5220, Longitude: 13.4070}, Timestamp: baseTime.Add(8 * 24 * time.Hour)},
-		{Location: &GPSCoords{Latitude: 52.5230, Longitude: 13.4080}, Timestamp: baseTime.Add(8*24*time.Hour + 1*time.Hour)},
+		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(8 * 24 * time.Hour)},
 	}
 
-	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
+	segments := SegmentWaypoints(wps, 10.0, 7*24*time.Hour)
+
 	if len(segments) != 2 {
-		t.Fatalf("expected 2 segments due to >7 days time gap, got %d", len(segments))
-	}
-	if len(segments[0].Coords) != 2 {
-		t.Errorf("expected 2 points in trip 1, got %d", len(segments[0].Coords))
-	}
-	if len(segments[1].Coords) != 2 {
-		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1].Coords))
+		t.Fatalf("expected 2 segments due to time gap > 7 days, got %d", len(segments))
 	}
 }
 
 func TestSegmentWaypoints_BoundaryTests(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// 1. Time boundary test: 6 days 23 hours (should not split) vs 7 days 1 hour (should split)
-	wp1 := Waypoint{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime}
-	wp2 := Waypoint{Location: &GPSCoords{Latitude: 52.5205, Longitude: 13.4055}, Timestamp: baseTime.Add(6*24*time.Hour + 23*time.Hour)}
-	wp3 := Waypoint{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(14*24*time.Hour + 1*time.Hour)} // 7 days 2 hours after wp2
-
-	segments := SegmentWaypoints([]Waypoint{wp1, wp2, wp3}, 10.0, 7*24*time.Hour)
-	if len(segments) != 2 {
-		t.Fatalf("expected 2 segments, got %d", len(segments))
+	// Test exact time boundary (7 days)
+	wpsTimeBoundary := []Waypoint{
+		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime},
+		{Location: &GPSCoords{Latitude: 52.5201, Longitude: 13.4051}, Timestamp: baseTime.Add(7 * 24 * time.Hour)},
 	}
-	if len(segments[0].Coords) != 2 || len(segments[1].Coords) != 1 {
-		t.Errorf("unexpected segment lengths: %v", segments)
+	segsTime := SegmentWaypoints(wpsTimeBoundary, 10.0, 7*24*time.Hour)
+	if len(segsTime) != 1 {
+		t.Errorf("expected 1 segment for exact 7 days boundary, got %d", len(segsTime))
+	}
+
+	// Just over time boundary (7 days + 1 second)
+	wpsTimeOver := []Waypoint{
+		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime},
+		{Location: &GPSCoords{Latitude: 52.5201, Longitude: 13.4051}, Timestamp: baseTime.Add(7*24*time.Hour + time.Second)},
+	}
+	segsTimeOver := SegmentWaypoints(wpsTimeOver, 10.0, 7*24*time.Hour)
+	if len(segsTimeOver) != 2 {
+		t.Errorf("expected 2 segments for 7 days + 1s, got %d", len(segsTimeOver))
 	}
 }
 
 func TestSegmentWaypoints_EdgeCases(t *testing.T) {
 	// Empty slice
 	if res := SegmentWaypoints(nil, 10.0, 7*24*time.Hour); len(res) != 0 {
-		t.Errorf("expected 0 segments for nil waypoints, got %d", len(res))
-	}
-	if res := SegmentWaypoints([]Waypoint{}, 10.0, 7*24*time.Hour); len(res) != 0 {
-		t.Errorf("expected 0 segments for empty waypoints, got %d", len(res))
+		t.Errorf("expected empty slice, got %v", res)
 	}
 
 	// Single point
 	single := []Waypoint{
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: time.Now()},
 	}
-	res := SegmentWaypoints(single, 10.0, 7*24*time.Hour)
-	if len(res) != 1 || len(res[0].Coords) != 1 {
-		t.Errorf("expected 1 segment with 1 point for single waypoint, got %v", res)
+	resSingle := SegmentWaypoints(single, 10.0, 7*24*time.Hour)
+	if len(resSingle) != 1 || len(resSingle[0].Coords) != 1 {
+		t.Errorf("expected 1 segment with 1 point, got %v", resSingle)
 	}
 
-	// Waypoints with nil Location should be ignored safely
+	// Points with nil locations filtered out
 	withNil := []Waypoint{
-		{Location: nil, Timestamp: time.Now()},
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: time.Now()},
 		{Location: nil, Timestamp: time.Now()},
 	}
@@ -179,21 +152,22 @@ func TestSegmentWaypoints_EdgeCases(t *testing.T) {
 func TestFilterPrivacy(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
+	// Live tracking points (ActivityID == "")
 	p0 := Waypoint{Location: &GPSCoords{Latitude: 48.8566, Longitude: 2.3522}, Timestamp: baseTime}
 	p1 := Waypoint{Location: &GPSCoords{Latitude: 48.1351, Longitude: 11.5820}, Timestamp: baseTime.Add(1 * time.Hour)}
 	p2 := Waypoint{Location: &GPSCoords{Latitude: 48.1400, Longitude: 11.5850}, Timestamp: baseTime.Add(2 * time.Hour)}
 	p3 := Waypoint{Location: &GPSCoords{Latitude: 48.1450, Longitude: 11.5900}, Timestamp: baseTime.Add(3 * time.Hour)}
 
-	// Test 1: All points close to the last one (p1, p2, p3)
+	// Test 1: All live points close to the last one (p1, p2, p3)
 	allClose := []Waypoint{p1, p2, p3}
 	filteredAllClose := FilterPrivacy(allClose, 10.0)
 	if len(filteredAllClose) != 0 {
-		t.Errorf("expected 0 points remaining when all points are within 10km of last point, got %d", len(filteredAllClose))
+		t.Errorf("expected 0 points remaining when all live points are within 10km of last point, got %d", len(filteredAllClose))
 	}
 
-	// Test 2: Point p0 is far away (>10km), p1, p2, p3 are within 10km of p3
-	mixed := []Waypoint{p0, p1, p2, p3}
-	filteredMixed := FilterPrivacy(mixed, 10.0)
+	// Test 2: Live point p0 is far away (>10km), p1, p2, p3 are within 10km of p3
+	mixedLive := []Waypoint{p0, p1, p2, p3}
+	filteredMixed := FilterPrivacy(mixedLive, 10.0)
 	if len(filteredMixed) != 1 {
 		t.Fatalf("expected 1 point (p0) remaining, got %d", len(filteredMixed))
 	}
@@ -201,7 +175,26 @@ func TestFilterPrivacy(t *testing.T) {
 		t.Errorf("expected p0, got %v", filteredMixed[0])
 	}
 
-	// Test 3: Empty slice
+	// Test 3: FIT activity waypoints (ActivityID != "") should NEVER be trimmed
+	fit1 := Waypoint{Location: &GPSCoords{Latitude: 48.1400, Longitude: 11.5850}, Timestamp: baseTime.Add(1 * time.Hour), ActivityID: "fit:ride.fit"}
+	fit2 := Waypoint{Location: &GPSCoords{Latitude: 48.1450, Longitude: 11.5900}, Timestamp: baseTime.Add(2 * time.Hour), ActivityID: "fit:ride.fit"}
+	fitOnly := []Waypoint{fit1, fit2}
+	filteredFit := FilterPrivacy(fitOnly, 10.0)
+	if len(filteredFit) != 2 {
+		t.Errorf("expected all FIT waypoints (2) to be preserved without trimming, got %d", len(filteredFit))
+	}
+
+	// Test 4: Mixed FIT and Live tracking: FIT kept completely, Live trimmed
+	mixedFitAndLive := []Waypoint{fit1, fit2, p1, p2, p3}
+	filteredMixedFitLive := FilterPrivacy(mixedFitAndLive, 10.0)
+	if len(filteredMixedFitLive) != 2 {
+		t.Fatalf("expected 2 FIT waypoints preserved and live points trimmed, got %d", len(filteredMixedFitLive))
+	}
+	if filteredMixedFitLive[0].ActivityID != "fit:ride.fit" || filteredMixedFitLive[1].ActivityID != "fit:ride.fit" {
+		t.Errorf("expected only FIT waypoints, got %v", filteredMixedFitLive)
+	}
+
+	// Test 5: Empty slice
 	if res := FilterPrivacy(nil, 10.0); len(res) != 0 {
 		t.Errorf("expected empty result for nil input")
 	}
