@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"tour-map/pkg/images"
@@ -26,12 +27,20 @@ const (
 var tmpl string
 
 func main() {
+	compressedImagesDir := filepath.Join(dataDir, "images-compressed")
+
 	// Ensure directories exist
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("Failed to create data directory %s: %v", dataDir, err)
 	}
+	if err := os.MkdirAll(compressedImagesDir, 0755); err != nil {
+		log.Fatalf("Failed to create compressed images directory %s: %v", compressedImagesDir, err)
+	}
 	if err := os.MkdirAll(fitDir, 0755); err != nil {
 		log.Fatalf("Failed to create fit directory %s: %v", fitDir, err)
+	}
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		log.Fatalf("Failed to create raw images directory %s: %v", imagesDir, err)
 	}
 
 	// Initialize waypoint store and image scanner
@@ -43,7 +52,7 @@ func main() {
 		log.Printf("Warning: initial load of codes failed: %v", err)
 	}
 
-	imageScanner := images.NewScanner(imagesDir)
+	imageScanner := images.NewScanner(imagesDir, compressedImagesDir)
 	if err := imageScanner.Scan(); err != nil {
 		log.Printf("Warning: initial image scan failed: %v", err)
 	}
@@ -56,7 +65,7 @@ func main() {
 	go poller.StartPeriodic(15*time.Second, nil)
 
 	// Initialize HTTP server
-	srv, err := server.NewServer(store, imageScanner, imagesDir, tmpl)
+	srv, err := server.NewServer(store, imageScanner, compressedImagesDir, imagesDir, tmpl)
 	if err != nil {
 		log.Fatalf("Failed to initialize server: %v", err)
 	}

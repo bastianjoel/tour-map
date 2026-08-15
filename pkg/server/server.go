@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"tour-map/pkg/geo"
@@ -20,24 +23,26 @@ type UpdateResponse struct {
 
 // Server handles HTTP requests for the tour map.
 type Server struct {
-	store        *tracker.Store
-	imageScanner *images.Scanner
-	imagesDir    string
-	tmpl         *template.Template
+	store               *tracker.Store
+	imageScanner        *images.Scanner
+	compressedImagesDir string
+	rawImagesDir        string
+	tmpl                *template.Template
 }
 
 // NewServer creates a new HTTP Server instance.
-func NewServer(store *tracker.Store, imageScanner *images.Scanner, imagesDir string, tmplContent string) (*Server, error) {
+func NewServer(store *tracker.Store, imageScanner *images.Scanner, compressedImagesDir, rawImagesDir string, tmplContent string) (*Server, error) {
 	tmpl, err := template.New("index").Parse(tmplContent)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Server{
-		store:        store,
-		imageScanner: imageScanner,
-		imagesDir:    imagesDir,
-		tmpl:         tmpl,
+		store:               store,
+		imageScanner:        imageScanner,
+		compressedImagesDir: compressedImagesDir,
+		rawImagesDir:        rawImagesDir,
+		tmpl:                tmpl,
 	}, nil
 }
 
@@ -45,11 +50,30 @@ func NewServer(store *tracker.Store, imageScanner *images.Scanner, imagesDir str
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Serve static files from imagesDir with cache headers
-	imageHandler := http.StripPrefix("/images/", http.FileServer(http.Dir(s.imagesDir)))
+	// Serve static image files with priority on compressed images and fallback to raw
 	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=259200")
-		imageHandler.ServeHTTP(w, r)
+		relPath := strings.TrimPrefix(r.URL.Path, "/images/")
+
+		// 1. Try serving from compressed images directory
+		if s.compressedImagesDir != "" {
+			compFile := filepath.Join(s.compressedImagesDir, filepath.FromSlash(relPath))
+			if info, err := os.Stat(compFile); err == nil && !info.IsDir() {
+				http.ServeFile(w, r, compFile)
+				return
+			}
+		}
+
+		// 2. Fallback to raw images directory
+		if s.rawImagesDir != "" {
+			rawFile := filepath.Join(s.rawImagesDir, filepath.FromSlash(relPath))
+			if info, err := os.Stat(rawFile); err == nil && !info.IsDir() {
+				http.ServeFile(w, r, rawFile)
+				return
+			}
+		}
+
+		http.NotFound(w, r)
 	})
 
 	// API endpoint for incremental updates

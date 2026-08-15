@@ -21,25 +21,28 @@ type ImageInfo struct {
 	Timestamp time.Time      `json:"timestamp"`
 }
 
-// Scanner scans an images directory recursively and extracts EXIF metadata and GPS coordinates.
+// Scanner scans a raw images directory recursively, compresses images into a compressed directory,
+// and extracts EXIF metadata and GPS coordinates.
 type Scanner struct {
-	imagesDir string
-	images    []ImageInfo
-	mu        sync.RWMutex
+	rawDir        string
+	compressedDir string
+	images        []ImageInfo
+	mu            sync.RWMutex
 }
 
-// NewScanner creates a new Scanner for the given directory.
-func NewScanner(imagesDir string) *Scanner {
+// NewScanner creates a new Scanner for the given raw and compressed image directories.
+func NewScanner(rawDir, compressedDir string) *Scanner {
 	return &Scanner{
-		imagesDir: imagesDir,
-		images:    make([]ImageInfo, 0),
+		rawDir:        rawDir,
+		compressedDir: compressedDir,
+		images:        make([]ImageInfo, 0),
 	}
 }
 
 // IsImageFile checks if the filename has a supported image extension.
 func IsImageFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	return ext == ".jpg" || ext == ".jpeg" || ext == ".tiff" || ext == ".tif"
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".tiff" || ext == ".tif" || ext == ".png"
 }
 
 // ExtractImageInfo extracts GPS coordinates and timestamp from an image file and its EXIF data.
@@ -91,15 +94,16 @@ func ExtractImageInfo(imagePath, relFilename string, info fs.FileInfo) ImageInfo
 	}
 }
 
-// Scan walks the images directory recursively, extracts metadata for all images, and sorts them by date.
+// Scan walks the raw images directory recursively, compresses new/updated images into the compressed directory,
+// extracts metadata, and sorts images chronologically by date.
 func (s *Scanner) Scan() error {
 	newImages := make([]ImageInfo, 0)
 
-	if _, err := os.Stat(s.imagesDir); os.IsNotExist(err) {
+	if _, err := os.Stat(s.rawDir); os.IsNotExist(err) {
 		return nil
 	}
 
-	err := filepath.WalkDir(s.imagesDir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(s.rawDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -110,13 +114,33 @@ func (s *Scanner) Scan() error {
 				log.Printf("Error getting file info for %s: %v", path, err)
 			}
 
-			relPath, err := filepath.Rel(s.imagesDir, path)
+			relPath, err := filepath.Rel(s.rawDir, path)
 			if err != nil {
 				relPath = filepath.Base(path)
 			}
 			relPath = filepath.ToSlash(relPath)
 
 			imgInfo := ExtractImageInfo(path, relPath, info)
+
+			// Perform compression if compressed directory is configured
+			if s.compressedDir != "" {
+				destPath := filepath.Join(s.compressedDir, filepath.FromSlash(relPath))
+				needsCompression := true
+
+				if destInfo, err := os.Stat(destPath); err == nil && info != nil {
+					// Compressed file exists; only re-compress if raw file is newer
+					if !info.ModTime().After(destInfo.ModTime()) {
+						needsCompression = false
+					}
+				}
+
+				if needsCompression {
+					if err := CompressImage(path, destPath, DefaultMaxImageDimension, DefaultJPEGQuality); err != nil {
+						log.Printf("Warning: failed to compress %s to %s: %v", path, destPath, err)
+					}
+				}
+			}
+
 			newImages = append(newImages, imgInfo)
 		}
 
@@ -124,7 +148,7 @@ func (s *Scanner) Scan() error {
 	})
 
 	if err != nil {
-		log.Printf("Error walking images directory: %v", err)
+		log.Printf("Error walking raw images directory: %v", err)
 		return err
 	}
 

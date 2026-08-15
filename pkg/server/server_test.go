@@ -25,15 +25,17 @@ func TestServer_HandleIndex(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	compDir := filepath.Join(dataDir, "images-compressed")
 	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(compDir, 0755)
 	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
 	store := tracker.NewStore(dataDir, fitDir, codesFile)
-	scanner := images.NewScanner(imagesDir)
+	scanner := images.NewScanner(imagesDir, compDir)
 
 	baseTime := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	// Add 2 waypoints in Trip 1, and 1 waypoint in Trip 2 (>10km away)
@@ -45,7 +47,7 @@ func TestServer_HandleIndex(t *testing.T) {
 	store.AddWaypoint(wp2, nil)
 	store.AddWaypoint(wp3, nil)
 
-	srv, err := NewServer(store, scanner, imagesDir, testTemplate)
+	srv, err := NewServer(store, scanner, compDir, imagesDir, testTemplate)
 	if err != nil {
 		t.Fatalf("NewServer() failed: %v", err)
 	}
@@ -83,10 +85,12 @@ func TestServer_HandleUpdates(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	compDir := filepath.Join(dataDir, "images-compressed")
 	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(compDir, 0755)
 	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
@@ -94,7 +98,7 @@ func TestServer_HandleUpdates(t *testing.T) {
 
 	store := tracker.NewStore(dataDir, fitDir, codesFile)
 	store.LoadCodes()
-	scanner := images.NewScanner(imagesDir)
+	scanner := images.NewScanner(imagesDir, compDir)
 
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	wp1 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 40.7128, Longitude: -74.0060}, Timestamp: baseTime}
@@ -103,7 +107,7 @@ func TestServer_HandleUpdates(t *testing.T) {
 	store.AddWaypoint(wp1, nil)
 	store.AddWaypoint(wp2, nil)
 
-	srv, err := NewServer(store, scanner, imagesDir, testTemplate)
+	srv, err := NewServer(store, scanner, compDir, imagesDir, testTemplate)
 	if err != nil {
 		t.Fatalf("NewServer() failed: %v", err)
 	}
@@ -139,7 +143,7 @@ func TestServer_HandleUpdates(t *testing.T) {
 	}
 }
 
-func TestServer_ImagesStatic(t *testing.T) {
+func TestServer_ImagesStaticAndFallback(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "server-images-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -147,42 +151,67 @@ func TestServer_ImagesStatic(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	compDir := filepath.Join(dataDir, "images-compressed")
 	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(compDir, 0755)
 	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
-	// Create a dummy image file
-	testImagePath := filepath.Join(imagesDir, "sample.jpg")
-	os.WriteFile(testImagePath, []byte("fake image content"), 0644)
+	// 1. Create a compressed image file in compDir
+	testCompPath := filepath.Join(compDir, "compressed_sample.jpg")
+	os.WriteFile(testCompPath, []byte("compressed image content"), 0644)
+
+	// 2. Create a raw image in imagesDir (not in compDir) to test fallback
+	testRawPath := filepath.Join(imagesDir, "raw_only.jpg")
+	os.WriteFile(testRawPath, []byte("raw image content"), 0644)
 
 	store := tracker.NewStore(dataDir, fitDir, codesFile)
-	scanner := images.NewScanner(imagesDir)
+	scanner := images.NewScanner(imagesDir, compDir)
 
-	srv, err := NewServer(store, scanner, imagesDir, testTemplate)
+	srv, err := NewServer(store, scanner, compDir, imagesDir, testTemplate)
 	if err != nil {
 		t.Fatalf("NewServer() failed: %v", err)
 	}
 
 	handler := srv.Handler()
 
-	req := httptest.NewRequest("GET", "/images/sample.jpg", nil)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
+	// Test 1: Serving compressed image
+	req1 := httptest.NewRequest("GET", "/images/compressed_sample.jpg", nil)
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, req1)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for image, got %d", rr.Code)
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for compressed image, got %d", rr1.Code)
+	}
+	if rr1.Body.String() != "compressed image content" {
+		t.Errorf("unexpected compressed body: %q", rr1.Body.String())
+	}
+	if !strings.Contains(rr1.Header().Get("Cache-Control"), "max-age=259200") {
+		t.Errorf("expected Cache-Control header, got %q", rr1.Header().Get("Cache-Control"))
 	}
 
-	cacheControl := rr.Header().Get("Cache-Control")
-	if !strings.Contains(cacheControl, "max-age=259200") {
-		t.Errorf("expected Cache-Control header, got %q", cacheControl)
+	// Test 2: Fallback to raw image when not present in compressed directory
+	req2 := httptest.NewRequest("GET", "/images/raw_only.jpg", nil)
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for fallback raw image, got %d", rr2.Code)
+	}
+	if rr2.Body.String() != "raw image content" {
+		t.Errorf("unexpected raw fallback body: %q", rr2.Body.String())
 	}
 
-	if rr.Body.String() != "fake image content" {
-		t.Errorf("unexpected body content: %q", rr.Body.String())
+	// Test 3: Non-existent image returns 404
+	req3 := httptest.NewRequest("GET", "/images/non_existent.jpg", nil)
+	rr3 := httptest.NewRecorder()
+	handler.ServeHTTP(rr3, req3)
+
+	if rr3.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for non-existent image, got %d", rr3.Code)
 	}
 }
 
@@ -194,10 +223,12 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	compDir := filepath.Join(dataDir, "images-compressed")
 	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(compDir, 0755)
 	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
@@ -205,7 +236,7 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 
 	store := tracker.NewStore(dataDir, fitDir, codesFile)
 	store.LoadCodes()
-	scanner := images.NewScanner(imagesDir)
+	scanner := images.NewScanner(imagesDir, compDir)
 
 	baseTime := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	// Trip 1 (Berlin)
@@ -220,7 +251,7 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 	store.AddWaypoint(wp3, nil)
 	store.AddWaypoint(wp4, nil)
 
-	srv, err := NewServer(store, scanner, imagesDir, testTemplate)
+	srv, err := NewServer(store, scanner, compDir, imagesDir, testTemplate)
 	if err != nil {
 		t.Fatalf("NewServer() failed: %v", err)
 	}
