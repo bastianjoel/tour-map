@@ -34,9 +34,9 @@ type Segment struct {
 }
 
 // SegmentWaypoints splits a chronological slice of waypoints into trip segments.
-// - Points originating from the SAME single FIT activity (matching non-empty ActivityID) are always kept in the same segment.
-//   If a pause/gap between consecutive points in that activity exceeds DefaultDottedPauseDistanceKm (2km), they are connected via a "dotted" line.
-// - Points from different sources/activities separated by >maxDistanceKm or >maxTimeGap are split into separate trip segments.
+//   - Points originating from the SAME single FIT activity (matching non-empty ActivityID) are always kept in the same segment.
+//     If a pause/gap between consecutive points in that activity exceeds DefaultDottedPauseDistanceKm (2km), they are connected via a "dotted" line.
+//   - Points from different sources/activities separated by >maxDistanceKm or >maxTimeGap are split into separate trip segments.
 func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap time.Duration) []Segment {
 	var validWaypoints []Waypoint
 	for _, wp := range waypoints {
