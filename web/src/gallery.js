@@ -37,7 +37,7 @@ function renderThumbnails() {
 
     const thumbImg = document.createElement('img');
     thumbImg.className = 'gallery-thumb-img';
-    thumbImg.src = `/images/${encodeURIComponent(img.filename)}`;
+    thumbImg.src = `/images/${encodeURI(img.filename)}`;
     thumbImg.alt = img.filename || t('imageAlt');
     thumbImg.loading = 'lazy';
 
@@ -66,7 +66,7 @@ export function showImage(index) {
 
   const img = activeTourImages[currentImageIndex];
   if (galleryMainImg) {
-    galleryMainImg.src = `/images/${encodeURIComponent(img.filename)}`;
+    galleryMainImg.src = `/images/${encodeURI(img.filename)}`;
     galleryMainImg.alt = img.filename || t('imageAlt');
   }
   if (galleryCounter) {

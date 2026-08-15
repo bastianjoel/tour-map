@@ -97,3 +97,61 @@ func TestScanner_MultipleImagesSorting(t *testing.T) {
 		t.Errorf("images not sorted by timestamp: %v, %v", imgs[0].Filename, imgs[1].Filename)
 	}
 }
+
+func TestScanner_RecursiveSubdirectories(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "images-recursive-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create nested directories:
+	// tmpDir/
+	//   root.jpg
+	//   2026/
+	//     tripA/
+	//       photo1.jpg
+	//     tripB/
+	//       sub/
+	//         photo2.jpg
+	tripADir := filepath.Join(tmpDir, "2026", "tripA")
+	subDir := filepath.Join(tmpDir, "2026", "tripB", "sub")
+	os.MkdirAll(tripADir, 0755)
+	os.MkdirAll(subDir, 0755)
+
+	pRoot := filepath.Join(tmpDir, "root.jpg")
+	p1 := filepath.Join(tripADir, "photo1.jpg")
+	p2 := filepath.Join(subDir, "photo2.jpg")
+
+	os.WriteFile(pRoot, []byte("root"), 0644)
+	os.WriteFile(p1, []byte("p1"), 0644)
+	os.WriteFile(p2, []byte("p2"), 0644)
+
+	tRoot := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 8, 1, 11, 0, 0, 0, time.UTC)
+
+	os.Chtimes(pRoot, tRoot, tRoot)
+	os.Chtimes(p1, t1, t1)
+	os.Chtimes(p2, t2, t2)
+
+	scanner := NewScanner(tmpDir)
+	if err := scanner.Scan(); err != nil {
+		t.Fatalf("Scan() failed: %v", err)
+	}
+
+	imgs := scanner.GetImages()
+	if len(imgs) != 3 {
+		t.Fatalf("expected 3 images recursively found, got %d", len(imgs))
+	}
+
+	if imgs[0].Filename != "root.jpg" {
+		t.Errorf("expected root.jpg, got %s", imgs[0].Filename)
+	}
+	if imgs[1].Filename != "2026/tripA/photo1.jpg" {
+		t.Errorf("expected 2026/tripA/photo1.jpg, got %s", imgs[1].Filename)
+	}
+	if imgs[2].Filename != "2026/tripB/sub/photo2.jpg" {
+		t.Errorf("expected 2026/tripB/sub/photo2.jpg, got %s", imgs[2].Filename)
+	}
+}

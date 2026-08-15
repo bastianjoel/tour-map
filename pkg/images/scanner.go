@@ -14,14 +14,14 @@ import (
 	"tour-map/pkg/geo"
 )
 
-// ImageInfo holds metadata about an image, including filename, optional GPS location, and timestamp.
+// ImageInfo holds metadata about an image, including relative filename path, optional GPS location, and timestamp.
 type ImageInfo struct {
 	Filename  string         `json:"filename"`
 	Location  *geo.GPSCoords `json:"location,omitempty"`
 	Timestamp time.Time      `json:"timestamp"`
 }
 
-// Scanner scans an images directory and extracts EXIF metadata and GPS coordinates.
+// Scanner scans an images directory recursively and extracts EXIF metadata and GPS coordinates.
 type Scanner struct {
 	imagesDir string
 	images    []ImageInfo
@@ -43,8 +43,11 @@ func IsImageFile(filename string) bool {
 }
 
 // ExtractImageInfo extracts GPS coordinates and timestamp from an image file and its EXIF data.
-func ExtractImageInfo(imagePath string, info fs.FileInfo) ImageInfo {
-	filename := filepath.Base(imagePath)
+func ExtractImageInfo(imagePath, relFilename string, info fs.FileInfo) ImageInfo {
+	if relFilename == "" {
+		relFilename = filepath.Base(imagePath)
+	}
+
 	var timestamp time.Time
 	if info != nil {
 		timestamp = info.ModTime()
@@ -53,7 +56,7 @@ func ExtractImageInfo(imagePath string, info fs.FileInfo) ImageInfo {
 	file, err := os.Open(imagePath)
 	if err != nil {
 		return ImageInfo{
-			Filename:  filename,
+			Filename:  relFilename,
 			Timestamp: timestamp,
 		}
 	}
@@ -62,7 +65,7 @@ func ExtractImageInfo(imagePath string, info fs.FileInfo) ImageInfo {
 	x, err := exif.Decode(file)
 	if err != nil {
 		return ImageInfo{
-			Filename:  filename,
+			Filename:  relFilename,
 			Timestamp: timestamp,
 		}
 	}
@@ -82,13 +85,13 @@ func ExtractImageInfo(imagePath string, info fs.FileInfo) ImageInfo {
 	}
 
 	return ImageInfo{
-		Filename:  filename,
+		Filename:  relFilename,
 		Location:  loc,
 		Timestamp: timestamp,
 	}
 }
 
-// Scan walks the images directory, extracts metadata for all images, and sorts them by date.
+// Scan walks the images directory recursively, extracts metadata for all images, and sorts them by date.
 func (s *Scanner) Scan() error {
 	newImages := make([]ImageInfo, 0)
 
@@ -107,7 +110,13 @@ func (s *Scanner) Scan() error {
 				log.Printf("Error getting file info for %s: %v", path, err)
 			}
 
-			imgInfo := ExtractImageInfo(path, info)
+			relPath, err := filepath.Rel(s.imagesDir, path)
+			if err != nil {
+				relPath = filepath.Base(path)
+			}
+			relPath = filepath.ToSlash(relPath)
+
+			imgInfo := ExtractImageInfo(path, relPath, info)
 			newImages = append(newImages, imgInfo)
 		}
 

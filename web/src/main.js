@@ -158,8 +158,8 @@ function drawImageMarkers(imgs) {
         } else {
           const popup = new maplibregl.Popup({ offset: 25, maxWidth: 'none' }).setHTML(`
             <div style="text-align: center; color: #0f172a; padding: 4px;">
-              <a href="/images/${encodeURIComponent(img.filename)}" target="_blank">
-                <img src="/images/${encodeURIComponent(img.filename)}" style="max-width: 45vh; max-height: 45vw; display: block; border-radius: 4px; margin-bottom: 6px;" />
+              <a href="/images/${encodeURI(img.filename)}" target="_blank">
+                <img src="/images/${encodeURI(img.filename)}" style="max-width: 45vh; max-height: 45vw; display: block; border-radius: 4px; margin-bottom: 6px;" />
               </a>
               <div style="font-size: 12px; color: #64748b; font-weight: 500;">${formatDate(img.timestamp)}</div>
             </div>
