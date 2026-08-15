@@ -16,26 +16,7 @@ applyStaticTranslations();
 
 const map = new maplibregl.Map({
   container: 'map',
-  style: {
-    version: 8,
-    sources: {
-      'osm-tiles': {
-        type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-        tileSize: 256,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      },
-    },
-    layers: [
-      {
-        id: 'osm-tiles-layer',
-        type: 'raster',
-        source: 'osm-tiles',
-        minzoom: 0,
-        maxzoom: 19,
-      },
-    ],
-  },
+  style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [13.405, 52.52],
   zoom: 10,
 });
@@ -141,7 +122,7 @@ function drawImageMarkers(imgs) {
   for (const img of imgs) {
     if (img.location && img.location.lat && img.location.lng) {
       if (!imageMarkers[img.filename]) {
-        const marker = new maplibregl.Marker({ color: '#e53e3e' })
+        const marker = new maplibregl.Marker({ color: '#2AAD27' })
           .setLngLat([img.location.lng, img.location.lat])
           .addTo(map);
 
@@ -174,12 +155,35 @@ function drawImageMarkers(imgs) {
 }
 
 map.on('load', () => {
+  // 1. Add Satellite Raster Source and Layer
+  map.addSource('satellite-source', {
+    type: 'raster',
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    ],
+    tileSize: 256,
+    attribution: '&copy; <a href="https://www.esri.com/">Esri</a>, Earthstar Geographics',
+  });
+
+  map.addLayer({
+    id: 'satellite-layer',
+    type: 'raster',
+    source: 'satellite-source',
+    layout: {
+      visibility: 'none',
+    },
+    paint: {
+      'raster-opacity': 1,
+    },
+  });
+
+  // 2. Add Tour Tracks Source
   map.addSource('tour-tracks', {
     type: 'geojson',
     data: segmentsToGeoJSON(segments),
   });
 
-  // Solid line layer for normal route sections
+  // 3. Add Solid Track Lines
   map.addLayer({
     id: 'tour-tracks-solid',
     type: 'line',
@@ -196,7 +200,7 @@ map.on('load', () => {
     },
   });
 
-  // Dotted line layer for >2km pauses/gaps in FIT activities
+  // 4. Add Dotted Track Lines for pauses >2km
   map.addLayer({
     id: 'tour-tracks-dotted',
     type: 'line',
@@ -237,6 +241,34 @@ map.on('load', () => {
   fitMapBounds(segments);
   drawImageMarkers(allImages);
 });
+
+// Setup map style switcher buttons (Map vs Satellite)
+function initStyleSwitcher() {
+  const libertyBtn = document.getElementById('style-liberty-btn');
+  const satelliteBtn = document.getElementById('style-satellite-btn');
+
+  if (libertyBtn) {
+    libertyBtn.addEventListener('click', () => {
+      libertyBtn.classList.add('active');
+      if (satelliteBtn) satelliteBtn.classList.remove('active');
+      if (map.getLayer('satellite-layer')) {
+        map.setLayoutProperty('satellite-layer', 'visibility', 'none');
+      }
+    });
+  }
+
+  if (satelliteBtn) {
+    satelliteBtn.addEventListener('click', () => {
+      satelliteBtn.classList.add('active');
+      if (libertyBtn) libertyBtn.classList.remove('active');
+      if (map.getLayer('satellite-layer')) {
+        map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
+      }
+    });
+  }
+}
+
+initStyleSwitcher();
 
 function updateMap() {
   const urlParams = new URLSearchParams(window.location.search);
