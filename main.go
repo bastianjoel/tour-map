@@ -15,6 +15,7 @@ import (
 
 const (
 	dataDir           = "./data"
+	fitDir            = "./fit"
 	imagesDir         = "./images"
 	trackingTokenFile = "./tracking_token.txt"
 	codesFile         = "./codes.txt"
@@ -25,13 +26,16 @@ const (
 var tmpl string
 
 func main() {
-	// Ensure data directory exists
+	// Ensure directories exist
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("Failed to create data directory %s: %v", dataDir, err)
 	}
+	if err := os.MkdirAll(fitDir, 0755); err != nil {
+		log.Fatalf("Failed to create fit directory %s: %v", fitDir, err)
+	}
 
 	// Initialize waypoint store and image scanner
-	store := tracker.NewStore(dataDir, codesFile)
+	store := tracker.NewStore(dataDir, fitDir, codesFile)
 	if err := store.LoadWaypoints(); err != nil {
 		log.Printf("Warning: initial load of waypoints failed: %v", err)
 	}

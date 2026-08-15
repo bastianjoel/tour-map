@@ -32,9 +32,14 @@
       attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
 
+    // Canvas renderer for optimal polyline rendering performance
+    const canvasRenderer = L.canvas();
+
     const path = L.featureGroup().addTo(map);
-    const initialTourData = document.getElementById('tour-data').textContent || '[]';
-    const segments = JSON.parse(initialTourData);
+    let segments = JSON.parse(document.getElementById('tour-data').textContent || '[]');
+    let images = JSON.parse(document.getElementById('image-data').textContent || '{}');
+    const imageMarkers = {};
+    let lastUpdateTime = new Date().toISOString();
 
     function drawSegments(segs) {
       path.clearLayers();
@@ -42,31 +47,28 @@
       for (const segment of segs) {
         if (Array.isArray(segment) && segment.length >= 1) {
           L.polyline(segment, {
-            color: "red"
+            color: "red",
+            renderer: canvasRenderer
           }).addTo(path);
         }
       }
     }
 
-    drawSegments(segments);
-
-    if (path.getLayers().length > 0) {
-      try {
-        const bounds = path.getBounds();
-        if (bounds.isValid()) {
-          map.fitBounds(bounds, {
-            animate: false,
-            padding: [20, 20],
-          });
+    function fitMapBounds() {
+      if (path.getLayers().length > 0) {
+        try {
+          const bounds = path.getBounds();
+          if (bounds.isValid()) {
+            map.fitBounds(bounds, {
+              animate: false,
+              padding: [20, 20],
+            });
+          }
+        } catch (e) {
+          console.error('Error fitting bounds:', e);
         }
-      } catch (e) {
-        console.error('Error fitting bounds:', e);
       }
     }
-
-    const initialImageData = document.getElementById('image-data').textContent || '{}';
-    const images = JSON.parse(initialImageData);
-    const imageMarkers = {};
 
     function drawImages(imgs) {
       if (!imgs || typeof imgs !== 'object') return;
@@ -79,36 +81,53 @@
       }
     }
 
+    // Initial render
+    drawSegments(segments);
+    fitMapBounds();
     drawImages(images);
 
-    // Fetch page and update map every 30 seconds
-    let currentSegmentsJSON = initialTourData;
+    // Optimized incremental updates using the /api/updates endpoint
     function updateMap() {
-      fetch(window.location.href)
-        .then(response => response.text())
-        .then(html => {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          const tourEl = doc.getElementById('tour-data');
-          const imageEl = doc.getElementById('image-data');
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code') || '';
+      const apiUrl = `/api/updates?since=${encodeURIComponent(lastUpdateTime)}&code=${encodeURIComponent(code)}`;
 
-          if (!tourEl || !imageEl) return;
-
-          const newTourData = tourEl.textContent;
-          const newImageData = imageEl.textContent;
-
-          // Update path if changed
-          if (newTourData !== currentSegmentsJSON) {
-            currentSegmentsJSON = newTourData;
-            const newSegments = JSON.parse(newTourData || '[]');
-            drawSegments(newSegments);
+      fetch(apiUrl)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          if (data.waypoints && data.waypoints.length > 0) {
+            // Full refresh of segments on update
+            fetch(`/?code=${encodeURIComponent(code)}`)
+              .then(res => res.text())
+              .then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const tourEl = doc.getElementById('tour-data');
+                if (tourEl) {
+                  segments = JSON.parse(tourEl.textContent || '[]');
+                  drawSegments(segments);
+                  fitMapBounds();
+                }
+              })
+              .catch(err => console.error('Error refreshing path:', err));
           }
 
-          // Update images
-          const newImages = JSON.parse(newImageData || '{}');
-          drawImages(newImages);
+          if (data.images) {
+            drawImages(data.images);
+          }
+
+          if (data.lastModified) {
+            lastUpdateTime = data.lastModified;
+          }
         })
-        .catch(error => console.error('Error fetching updated data:', error));
+        .catch(error => {
+          console.error('Error fetching updates:', error);
+        });
     }
 
     setInterval(updateMap, 30000); // Update every 30 seconds

@@ -4,10 +4,18 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"time"
 
 	"tour-map/pkg/images"
 	"tour-map/pkg/tracker"
 )
+
+// UpdateResponse represents the JSON payload for incremental map updates.
+type UpdateResponse struct {
+	Waypoints    [][][2]float64       `json:"waypoints"`
+	Images       map[string][]float64 `json:"images"`
+	LastModified time.Time            `json:"lastModified"`
+}
 
 // Server handles HTTP requests for the tour map.
 type Server struct {
@@ -43,10 +51,49 @@ func (s *Server) Handler() http.Handler {
 		imageHandler.ServeHTTP(w, r)
 	})
 
+	// API endpoint for incremental updates
+	mux.HandleFunc("/api/updates", s.handleUpdates)
+
 	// Main map page
 	mux.HandleFunc("/", s.handleIndex)
 
 	return mux
+}
+
+// handleUpdates returns JSON data for incremental updates since a given timestamp.
+func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	sinceParam := r.URL.Query().Get("since")
+	var since time.Time
+	var err error
+
+	if sinceParam != "" {
+		since, err = time.Parse(time.RFC3339, sinceParam)
+		if err != nil {
+			http.Error(w, "Invalid 'since' timestamp format, use RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+
+	code := r.URL.Query().Get("code")
+	segments, lastModified := s.store.GetUpdates(since, code)
+
+	imagesMap := s.imageScanner.GetLocations()
+	imageData := make(map[string][]float64, len(imagesMap))
+	for filename, coords := range imagesMap {
+		imageData[filename] = []float64{coords.Latitude, coords.Longitude}
+	}
+
+	response := UpdateResponse{
+		Waypoints:    segments,
+		Images:       imageData,
+		LastModified: lastModified,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 // handleIndex processes requests for the main map view.

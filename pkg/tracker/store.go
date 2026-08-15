@@ -15,9 +15,10 @@ import (
 	"tour-map/pkg/geo"
 )
 
-// Store manages the in-memory cache of waypoints and access codes.
+// Store manages the in-memory cache of waypoints, access codes, and background updates.
 type Store struct {
 	dataDir        string
+	fitDir         string
 	codesFile      string
 	waypoints      []geo.Waypoint
 	latestWaypoint *time.Time
@@ -27,68 +28,117 @@ type Store struct {
 }
 
 // NewStore creates a new waypoint Store.
-func NewStore(dataDir, codesFile string) *Store {
+func NewStore(dataDir, fitDir, codesFile string) *Store {
 	return &Store{
 		dataDir:   dataDir,
+		fitDir:    fitDir,
 		codesFile: codesFile,
 		waypoints: make([]geo.Waypoint, 0),
 		codes:     make(map[string]struct{}),
 	}
 }
 
-// LoadWaypoints reads all JSON files in the data directory and loads them into memory sorted by timestamp.
+// LoadWaypoints reads JSON files from dataDir and FIT files from fitDir, deduplicating and pruning them.
 func (s *Store) LoadWaypoints() error {
-	nextPathData := make([]geo.Waypoint, 0)
+	jsonWaypoints := make([]geo.Waypoint, 0)
 
-	if _, err := os.Stat(s.dataDir); os.IsNotExist(err) {
-		return nil
-	}
-
-	err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".json") {
-			data, err := os.ReadFile(path)
+	// 1. Load JSON files from data directory
+	if _, err := os.Stat(s.dataDir); err == nil {
+		err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				log.Printf("Error reading JSON file %s: %v", path, err)
-				return nil
+				return err
 			}
 
-			var wp geo.Waypoint
-			if err := json.Unmarshal(data, &wp); err != nil {
-				log.Printf("Error parsing JSON file %s: %v", path, err)
-				return nil
+			if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".json") {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					log.Printf("Error reading JSON file %s: %v", path, err)
+					return nil
+				}
+
+				var wp geo.Waypoint
+				if err := json.Unmarshal(data, &wp); err != nil {
+					log.Printf("Error parsing JSON file %s: %v", path, err)
+					return nil
+				}
+
+				if wp.Location != nil {
+					jsonWaypoints = append(jsonWaypoints, wp)
+				}
 			}
 
-			if wp.Location != nil {
-				nextPathData = append(nextPathData, wp)
-			}
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("Error walking data directory: %v", err)
 		}
-
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("Error walking data directory: %v", err)
-		return err
 	}
 
-	slices.SortFunc(nextPathData, func(a, b geo.Waypoint) int {
+	// 2. Load FIT files from fit directory
+	fitWaypoints := make([]geo.Waypoint, 0)
+	if s.fitDir != "" {
+		if _, err := os.Stat(s.fitDir); err == nil {
+			err := filepath.WalkDir(s.fitDir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+
+				if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".fit") {
+					wps, err := ParseFitFile(path)
+					if err != nil {
+						log.Printf("Error parsing FIT file %s: %v", path, err)
+						return nil
+					}
+					fitWaypoints = append(fitWaypoints, wps...)
+				}
+
+				return nil
+			})
+
+			if err != nil {
+				log.Printf("Error walking fit directory: %v", err)
+			}
+		}
+	}
+
+	// 3. Combine and deduplicate: keep JSON waypoints only if strictly newer than the latest FIT waypoint
+	allWaypoints := make([]geo.Waypoint, 0, len(jsonWaypoints)+len(fitWaypoints))
+	if len(fitWaypoints) > 0 {
+		slices.SortFunc(fitWaypoints, func(a, b geo.Waypoint) int {
+			return a.Timestamp.Compare(b.Timestamp)
+		})
+
+		latestFitTime := fitWaypoints[len(fitWaypoints)-1].Timestamp
+		for _, wp := range jsonWaypoints {
+			if wp.Timestamp.After(latestFitTime) {
+				allWaypoints = append(allWaypoints, wp)
+			}
+		}
+		allWaypoints = append(allWaypoints, fitWaypoints...)
+	} else {
+		allWaypoints = append(allWaypoints, jsonWaypoints...)
+	}
+
+	// 4. Sort all waypoints chronologically
+	slices.SortFunc(allWaypoints, func(a, b geo.Waypoint) int {
 		return a.Timestamp.Compare(b.Timestamp)
 	})
+
+	// 5. Prune points closer than 5 meters to prevent dense clutter
+	prunedWaypoints := geo.PruneWaypoints(allWaypoints, geo.DefaultMinPruneDistanceKm)
 
 	s.wpMutex.Lock()
 	defer s.wpMutex.Unlock()
 
-	s.waypoints = nextPathData
-	if len(nextPathData) > 0 {
-		latest := nextPathData[len(nextPathData)-1].Timestamp
+	s.waypoints = prunedWaypoints
+	if len(prunedWaypoints) > 0 {
+		latest := prunedWaypoints[len(prunedWaypoints)-1].Timestamp
 		s.latestWaypoint = &latest
 	}
 
-	log.Printf("Loaded %d JSON files from %s", len(nextPathData), s.dataDir)
+	log.Printf("Loaded %d JSON waypoints, %d FIT waypoints -> %d total waypoints (%d after pruning)",
+		len(jsonWaypoints), len(fitWaypoints), len(allWaypoints), len(prunedWaypoints))
 	return nil
 }
 
@@ -146,10 +196,30 @@ func (s *Store) AddWaypoint(wp geo.Waypoint, rawData []byte) bool {
 		return false
 	}
 
+	// Check if this new waypoint should be pruned relative to the last kept waypoint
+	if len(s.waypoints) > 0 {
+		lastKept := s.waypoints[len(s.waypoints)-1]
+		if lastKept.Location != nil {
+			dist := geo.DistanceKm(
+				lastKept.Location.Latitude, lastKept.Location.Longitude,
+				wp.Location.Latitude, wp.Location.Longitude,
+			)
+			if dist < geo.DefaultMinPruneDistanceKm {
+				// Too close to previous point; update timestamp/file but do not clutter in-memory trace
+				s.latestWaypoint = &wp.Timestamp
+				if len(rawData) > 0 && s.dataDir != "" {
+					filename := fmt.Sprintf("%s/tracking_%s.json", s.dataDir, wp.Timestamp.Format("20060102_150405"))
+					os.WriteFile(filename, rawData, 0644)
+				}
+				return true
+			}
+		}
+	}
+
 	s.waypoints = append(s.waypoints, wp)
 	s.latestWaypoint = &wp.Timestamp
 
-	if len(rawData) > 0 {
+	if len(rawData) > 0 && s.dataDir != "" {
 		filename := fmt.Sprintf("%s/tracking_%s.json", s.dataDir, wp.Timestamp.Format("20060102_150405"))
 		if err := os.WriteFile(filename, rawData, 0644); err != nil {
 			log.Printf("Error saving tracking file %s: %v", filename, err)
@@ -179,4 +249,31 @@ func (s *Store) GetTripSegments(code string) [][][2]float64 {
 	}
 
 	return geo.SegmentWaypoints(wps, geo.DefaultMaxDistanceKm, geo.DefaultMaxTimeGap)
+}
+
+// GetUpdates returns trip segments and the last modified timestamp for points after the given since timestamp.
+func (s *Store) GetUpdates(since time.Time, code string) ([][][2]float64, time.Time) {
+	wps := s.GetWaypoints()
+
+	if !s.IsAuthorized(code) {
+		wps = geo.FilterPrivacy(wps, geo.DefaultPrivacyRadiusKm)
+	}
+
+	var lastModified time.Time
+	if len(wps) > 0 {
+		lastModified = wps[len(wps)-1].Timestamp
+	}
+
+	if !since.IsZero() {
+		var filtered []geo.Waypoint
+		for _, wp := range wps {
+			if wp.Timestamp.After(since) {
+				filtered = append(filtered, wp)
+			}
+		}
+		wps = filtered
+	}
+
+	segments := geo.SegmentWaypoints(wps, geo.DefaultMaxDistanceKm, geo.DefaultMaxTimeGap)
+	return segments, lastModified
 }

@@ -25,12 +25,14 @@ func TestServer_HandleIndex(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
-	store := tracker.NewStore(dataDir, codesFile)
+	store := tracker.NewStore(dataDir, fitDir, codesFile)
 	scanner := images.NewScanner(imagesDir)
 
 	baseTime := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
@@ -73,6 +75,70 @@ func TestServer_HandleIndex(t *testing.T) {
 	}
 }
 
+func TestServer_HandleUpdates(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "server-updates-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dataDir := filepath.Join(tmpDir, "data")
+	fitDir := filepath.Join(tmpDir, "fit")
+	imagesDir := filepath.Join(tmpDir, "images")
+	codesFile := filepath.Join(tmpDir, "codes.txt")
+	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
+	os.MkdirAll(imagesDir, 0755)
+
+	os.WriteFile(codesFile, []byte("valid-code\n"), 0644)
+
+	store := tracker.NewStore(dataDir, fitDir, codesFile)
+	store.LoadCodes()
+	scanner := images.NewScanner(imagesDir)
+
+	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	wp1 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 40.7128, Longitude: -74.0060}, Timestamp: baseTime}
+	wp2 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 40.7200, Longitude: -74.0070}, Timestamp: baseTime.Add(time.Hour)}
+
+	store.AddWaypoint(wp1, nil)
+	store.AddWaypoint(wp2, nil)
+
+	srv, err := NewServer(store, scanner, imagesDir, testTemplate)
+	if err != nil {
+		t.Fatalf("NewServer() failed: %v", err)
+	}
+
+	handler := srv.Handler()
+
+	// 1. Query updates with valid code and since timestamp between wp1 and wp2
+	since := baseTime.Add(30 * time.Minute).Format(time.RFC3339)
+	req := httptest.NewRequest("GET", "/api/updates?since="+since+"&code=valid-code", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rr.Code)
+	}
+
+	var resp UpdateResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode JSON response: %v", err)
+	}
+
+	if len(resp.Waypoints) != 1 || len(resp.Waypoints[0]) != 1 {
+		t.Errorf("expected 1 segment with 1 waypoint, got %v", resp.Waypoints)
+	}
+
+	// 2. Query updates with invalid timestamp format
+	reqInvalid := httptest.NewRequest("GET", "/api/updates?since=invalid-date", nil)
+	rrInvalid := httptest.NewRecorder()
+	handler.ServeHTTP(rrInvalid, reqInvalid)
+
+	if rrInvalid.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request, got %d", rrInvalid.Code)
+	}
+}
+
 func TestServer_ImagesStatic(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "server-images-*")
 	if err != nil {
@@ -81,16 +147,18 @@ func TestServer_ImagesStatic(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
 	// Create a dummy image file
 	testImagePath := filepath.Join(imagesDir, "sample.jpg")
 	os.WriteFile(testImagePath, []byte("fake image content"), 0644)
 
-	store := tracker.NewStore(dataDir, codesFile)
+	store := tracker.NewStore(dataDir, fitDir, codesFile)
 	scanner := images.NewScanner(imagesDir)
 
 	srv, err := NewServer(store, scanner, imagesDir, testTemplate)
@@ -126,14 +194,16 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
+	fitDir := filepath.Join(tmpDir, "fit")
 	imagesDir := filepath.Join(tmpDir, "images")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
 	os.MkdirAll(imagesDir, 0755)
 
 	os.WriteFile(codesFile, []byte("auth123\n"), 0644)
 
-	store := tracker.NewStore(dataDir, codesFile)
+	store := tracker.NewStore(dataDir, fitDir, codesFile)
 	store.LoadCodes()
 	scanner := images.NewScanner(imagesDir)
 

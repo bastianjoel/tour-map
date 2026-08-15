@@ -20,9 +20,10 @@ func TestPoller_PollOnce(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	fitDir := filepath.Join(tmpDir, "fit")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	tokenFile := filepath.Join(tmpDir, "tracking_token.txt")
+	os.MkdirAll(dataDir, 0755)
 
 	// Write token
 	os.WriteFile(tokenFile, []byte("valid-token-123\n"), 0644)
@@ -43,7 +44,7 @@ func TestPoller_PollOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	store := NewStore(dataDir, codesFile)
+	store := NewStore(dataDir, fitDir, codesFile)
 	poller := NewPoller(store, tokenFile, server.URL, server.Client())
 
 	if err := poller.PollOnce(); err != nil {
@@ -67,9 +68,10 @@ func TestPoller_Token404(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	fitDir := filepath.Join(tmpDir, "fit")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
 	tokenFile := filepath.Join(tmpDir, "tracking_token.txt")
+	os.MkdirAll(dataDir, 0755)
 
 	os.WriteFile(tokenFile, []byte("invalid-token\n"), 0644)
 
@@ -78,7 +80,7 @@ func TestPoller_Token404(t *testing.T) {
 	}))
 	defer server.Close()
 
-	store := NewStore(dataDir, codesFile)
+	store := NewStore(dataDir, fitDir, codesFile)
 	poller := NewPoller(store, tokenFile, server.URL, server.Client())
 
 	if err := poller.PollOnce(); err != nil {

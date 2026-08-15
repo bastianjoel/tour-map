@@ -18,8 +18,10 @@ func TestStore_LoadWaypointsAndCodes(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	fitDir := filepath.Join(tmpDir, "fit")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
+	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(fitDir, 0755)
 
 	// Write codes file
 	os.WriteFile(codesFile, []byte("secret123\nothercode\n"), 0644)
@@ -44,7 +46,7 @@ func TestStore_LoadWaypointsAndCodes(t *testing.T) {
 	os.WriteFile(filepath.Join(dataDir, "tracking_2.json"), raw2, 0644)
 	os.WriteFile(filepath.Join(dataDir, "tracking_1.json"), raw1, 0644)
 
-	store := NewStore(dataDir, codesFile)
+	store := NewStore(dataDir, fitDir, codesFile)
 	if err := store.LoadWaypoints(); err != nil {
 		t.Fatalf("LoadWaypoints() failed: %v", err)
 	}
@@ -83,10 +85,11 @@ func TestStore_AddWaypoint(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	fitDir := filepath.Join(tmpDir, "fit")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
+	os.MkdirAll(dataDir, 0755)
 
-	store := NewStore(dataDir, codesFile)
+	store := NewStore(dataDir, fitDir, codesFile)
 	t1 := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 8, 1, 11, 0, 0, 0, time.UTC)
 
@@ -95,7 +98,7 @@ func TestStore_AddWaypoint(t *testing.T) {
 		Timestamp: t1,
 	}
 	wp2 := geo.Waypoint{
-		Location:  &geo.GPSCoords{Latitude: 52.5210, Longitude: 13.4060},
+		Location:  &geo.GPSCoords{Latitude: 52.5300, Longitude: 13.4150},
 		Timestamp: t2,
 	}
 
@@ -124,5 +127,43 @@ func TestStore_AddWaypoint(t *testing.T) {
 
 	if len(store.GetWaypoints()) != 2 {
 		t.Errorf("expected 2 waypoints, got %d", len(store.GetWaypoints()))
+	}
+}
+
+func TestStore_GetUpdates(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tracker-updates-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dataDir := filepath.Join(tmpDir, "data")
+	fitDir := filepath.Join(tmpDir, "fit")
+	codesFile := filepath.Join(tmpDir, "codes.txt")
+	os.MkdirAll(dataDir, 0755)
+
+	os.WriteFile(codesFile, []byte("pass123\n"), 0644)
+	store := NewStore(dataDir, fitDir, codesFile)
+	store.LoadCodes()
+
+	t0 := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	wp1 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: t0}
+	wp2 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: t0.Add(1 * time.Hour)}
+	wp3 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5220, Longitude: 13.4070}, Timestamp: t0.Add(2 * time.Hour)}
+
+	store.AddWaypoint(wp1, nil)
+	store.AddWaypoint(wp2, nil)
+	store.AddWaypoint(wp3, nil)
+
+	// Query with since = t0 (should return wp2 and wp3)
+	segs, lastMod := store.GetUpdates(t0, "pass123")
+	if len(segs) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(segs))
+	}
+	if len(segs[0]) != 2 {
+		t.Errorf("expected 2 waypoints in update, got %d", len(segs[0]))
+	}
+	if !lastMod.Equal(t0.Add(2 * time.Hour)) {
+		t.Errorf("expected lastModified = %v, got %v", t0.Add(2*time.Hour), lastMod)
 	}
 }
