@@ -15,10 +15,17 @@ const (
 	DefaultPrivacyRadiusKm = 10.0
 )
 
+// Segment represents a distinct connected trip segment with its timeframe and coordinates.
+type Segment struct {
+	ID        int          `json:"id"`
+	StartTime time.Time    `json:"startTime"`
+	EndTime   time.Time    `json:"endTime"`
+	Coords    [][2]float64 `json:"coords"`
+}
+
 // SegmentWaypoints splits a chronological slice of waypoints into separate trip segments
 // whenever the distance between consecutive points exceeds maxDistanceKm or the time gap exceeds maxTimeGap.
-// It returns a slice of coordinate paths formatted as [][][2]float64 for JSON serialization.
-func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap time.Duration) [][][2]float64 {
+func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap time.Duration) []Segment {
 	var validWaypoints []Waypoint
 	for _, wp := range waypoints {
 		if wp.Location != nil {
@@ -27,7 +34,7 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 	}
 
 	if len(validWaypoints) == 0 {
-		return [][][2]float64{}
+		return []Segment{}
 	}
 
 	if maxDistanceKm <= 0 {
@@ -37,14 +44,19 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 		maxTimeGap = DefaultMaxTimeGap
 	}
 
-	var segments [][][2]float64
-	var currentSegment [][2]float64
+	var segments []Segment
+	var currentCoords [][2]float64
+	var currentStart time.Time
+	var currentEnd time.Time
+	segmentID := 0
 
 	for i, wp := range validWaypoints {
 		coord := [2]float64{wp.Location.Latitude, wp.Location.Longitude}
 
 		if i == 0 {
-			currentSegment = append(currentSegment, coord)
+			currentCoords = append(currentCoords, coord)
+			currentStart = wp.Timestamp
+			currentEnd = wp.Timestamp
 			continue
 		}
 
@@ -60,18 +72,32 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 		}
 
 		if dist > maxDistanceKm || timeDiff > maxTimeGap {
-			// Disconnect: start a new trip segment
-			if len(currentSegment) > 0 {
-				segments = append(segments, currentSegment)
+			// Disconnect: close current segment and start a new trip segment
+			if len(currentCoords) > 0 {
+				segments = append(segments, Segment{
+					ID:        segmentID,
+					StartTime: currentStart,
+					EndTime:   currentEnd,
+					Coords:    currentCoords,
+				})
+				segmentID++
 			}
-			currentSegment = [][2]float64{coord}
+			currentCoords = [][2]float64{coord}
+			currentStart = wp.Timestamp
+			currentEnd = wp.Timestamp
 		} else {
-			currentSegment = append(currentSegment, coord)
+			currentCoords = append(currentCoords, coord)
+			currentEnd = wp.Timestamp
 		}
 	}
 
-	if len(currentSegment) > 0 {
-		segments = append(segments, currentSegment)
+	if len(currentCoords) > 0 {
+		segments = append(segments, Segment{
+			ID:        segmentID,
+			StartTime: currentStart,
+			EndTime:   currentEnd,
+			Coords:    currentCoords,
+		})
 	}
 
 	return segments

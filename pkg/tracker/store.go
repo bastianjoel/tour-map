@@ -205,7 +205,6 @@ func (s *Store) AddWaypoint(wp geo.Waypoint, rawData []byte) bool {
 				wp.Location.Latitude, wp.Location.Longitude,
 			)
 			if dist < geo.DefaultMinPruneDistanceKm {
-				// Too close to previous point; update timestamp/file but do not clutter in-memory trace
 				s.latestWaypoint = &wp.Timestamp
 				if len(rawData) > 0 && s.dataDir != "" {
 					filename := fmt.Sprintf("%s/tracking_%s.json", s.dataDir, wp.Timestamp.Format("20060102_150405"))
@@ -241,7 +240,7 @@ func (s *Store) GetWaypoints() []geo.Waypoint {
 
 // GetTripSegments returns waypoints partitioned into distinct trip segments.
 // If the access code is not authorized, the 10km tail of the latest trip is filtered for privacy.
-func (s *Store) GetTripSegments(code string) [][][2]float64 {
+func (s *Store) GetTripSegments(code string) []geo.Segment {
 	wps := s.GetWaypoints()
 
 	if !s.IsAuthorized(code) {
@@ -252,7 +251,7 @@ func (s *Store) GetTripSegments(code string) [][][2]float64 {
 }
 
 // GetUpdates returns trip segments and the last modified timestamp for points after the given since timestamp.
-func (s *Store) GetUpdates(since time.Time, code string) ([][][2]float64, time.Time) {
+func (s *Store) GetUpdates(since time.Time, code string) ([]geo.Segment, time.Time) {
 	wps := s.GetWaypoints()
 
 	if !s.IsAuthorized(code) {

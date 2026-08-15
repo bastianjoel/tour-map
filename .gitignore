@@ -4,3 +4,8 @@
 /tracking_token.txt
 /codes.txt
 /tour-map
+/web/node_modules
+/web/dist
+dist
+coverage.out
+tracking.txt

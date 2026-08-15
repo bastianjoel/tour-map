@@ -6,15 +6,16 @@ import (
 	"net/http"
 	"time"
 
+	"tour-map/pkg/geo"
 	"tour-map/pkg/images"
 	"tour-map/pkg/tracker"
 )
 
 // UpdateResponse represents the JSON payload for incremental map updates.
 type UpdateResponse struct {
-	Waypoints    [][][2]float64       `json:"waypoints"`
-	Images       map[string][]float64 `json:"images"`
-	LastModified time.Time            `json:"lastModified"`
+	Waypoints    []geo.Segment      `json:"waypoints"`
+	Images       []images.ImageInfo `json:"images"`
+	LastModified time.Time          `json:"lastModified"`
 }
 
 // Server handles HTTP requests for the tour map.
@@ -76,16 +77,11 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	segments, lastModified := s.store.GetUpdates(since, code)
-
-	imagesMap := s.imageScanner.GetLocations()
-	imageData := make(map[string][]float64, len(imagesMap))
-	for filename, coords := range imagesMap {
-		imageData[filename] = []float64{coords.Latitude, coords.Longitude}
-	}
+	allImages := s.imageScanner.GetImages()
 
 	response := UpdateResponse{
 		Waypoints:    segments,
-		Images:       imageData,
+		Images:       allImages,
 		LastModified: lastModified,
 	}
 
@@ -105,14 +101,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	segments := s.store.GetTripSegments(code)
+	allImages := s.imageScanner.GetImages()
 
-	imagesMap := s.imageScanner.GetLocations()
-	imageData := make(map[string][]float64, len(imagesMap))
-	for filename, coords := range imagesMap {
-		imageData[filename] = []float64{coords.Latitude, coords.Longitude}
-	}
-
-	imageDataJSON, err := json.Marshal(imageData)
+	imagesJSON, err := json.Marshal(allImages)
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -128,7 +119,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Images    template.JS
 		Waypoints template.JS
 	}{
-		Images:    template.JS(string(imageDataJSON)),
+		Images:    template.JS(string(imagesJSON)),
 		Waypoints: template.JS(string(waypointsJSON)),
 	}
 

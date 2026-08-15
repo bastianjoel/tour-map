@@ -1,0 +1,239 @@
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import './style.css';
+import { openGallery, formatDate, setGalleryMap, initGalleryEvents } from './gallery.js';
+
+let segments = JSON.parse(document.getElementById('tour-data')?.textContent || '[]');
+let allImages = JSON.parse(document.getElementById('image-data')?.textContent || '[]');
+const imageMarkers = {};
+let lastUpdateTime = new Date().toISOString();
+
+if (!Array.isArray(allImages)) allImages = [];
+if (!Array.isArray(segments)) segments = [];
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      'osm-tiles': {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      },
+    },
+    layers: [
+      {
+        id: 'osm-tiles-layer',
+        type: 'raster',
+        source: 'osm-tiles',
+        minzoom: 0,
+        maxzoom: 19,
+      },
+    ],
+  },
+  center: [13.405, 52.52],
+  zoom: 10,
+});
+
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+setGalleryMap(map);
+initGalleryEvents();
+
+// 1 hour buffer window around tour timeframe
+const TIME_BUFFER_MS = 60 * 60 * 1000;
+
+function isImageInSegment(img, seg) {
+  if (!img.timestamp || !seg || !seg.startTime || !seg.endTime) return false;
+  const t = new Date(img.timestamp).getTime();
+  const start = new Date(seg.startTime).getTime() - TIME_BUFFER_MS;
+  const end = new Date(seg.endTime).getTime() + TIME_BUFFER_MS;
+  return t >= start && t <= end;
+}
+
+function getImagesForSegment(seg) {
+  if (!seg) return [];
+  return allImages.filter((img) => isImageInSegment(img, seg));
+}
+
+function findSegmentForImage(img) {
+  return segments.find((seg) => isImageInSegment(img, seg));
+}
+
+function segmentsToGeoJSON(segs) {
+  const features = [];
+  if (Array.isArray(segs)) {
+    for (const segment of segs) {
+      const coords = segment.coords || segment;
+      if (Array.isArray(coords) && coords.length >= 2) {
+        const coordinates = coords.map((pt) => [pt[1], pt[0]]);
+        features.push({
+          type: 'Feature',
+          properties: {
+            segmentId: segment.id !== undefined ? segment.id : 0,
+          },
+          geometry: {
+            type: 'LineString',
+            coordinates: coordinates,
+          },
+        });
+      }
+    }
+  }
+  return {
+    type: 'FeatureCollection',
+    features: features,
+  };
+}
+
+function fitMapBounds(segs) {
+  const bounds = new maplibregl.LngLatBounds();
+  let count = 0;
+
+  if (Array.isArray(segs)) {
+    for (const segment of segs) {
+      const coords = segment.coords || segment;
+      if (Array.isArray(coords)) {
+        for (const pt of coords) {
+          bounds.extend([pt[1], pt[0]]);
+          count++;
+        }
+      }
+    }
+  }
+
+  if (count > 0) {
+    map.fitBounds(bounds, {
+      padding: 40,
+      maxZoom: 15,
+      animate: false,
+    });
+  }
+}
+
+function drawImageMarkers(imgs) {
+  if (!Array.isArray(imgs)) return;
+  for (const img of imgs) {
+    if (img.location && img.location.lat && img.location.lng) {
+      if (!imageMarkers[img.filename]) {
+        const marker = new maplibregl.Marker({ color: '#e53e3e' })
+          .setLngLat([img.location.lng, img.location.lat])
+          .addTo(map);
+
+        marker.getElement().style.cursor = 'pointer';
+
+        const seg = findSegmentForImage(img);
+        if (seg) {
+          marker.getElement().addEventListener('click', (e) => {
+            e.stopPropagation();
+            const tourImgs = getImagesForSegment(seg);
+            const idx = tourImgs.findIndex((item) => item.filename === img.filename);
+            openGallery(tourImgs, idx >= 0 ? idx : 0);
+          });
+        } else {
+          const popup = new maplibregl.Popup({ offset: 25, maxWidth: 'none' }).setHTML(`
+            <div style="text-align: center; color: #0f172a; padding: 4px;">
+              <a href="/images/${encodeURIComponent(img.filename)}" target="_blank">
+                <img src="/images/${encodeURIComponent(img.filename)}" style="max-width: 45vh; max-height: 45vw; display: block; border-radius: 4px; margin-bottom: 6px;" />
+              </a>
+              <div style="font-size: 12px; color: #64748b; font-weight: 500;">${formatDate(img.timestamp)}</div>
+            </div>
+          `);
+          marker.setPopup(popup);
+        }
+
+        imageMarkers[img.filename] = marker;
+      }
+    }
+  }
+}
+
+map.on('load', () => {
+  map.addSource('tour-tracks', {
+    type: 'geojson',
+    data: segmentsToGeoJSON(segments),
+  });
+
+  map.addLayer({
+    id: 'tour-tracks-layer',
+    type: 'line',
+    source: 'tour-tracks',
+    layout: {
+      'line-join': 'round',
+      'line-cap': 'round',
+    },
+    paint: {
+      'line-color': '#e53e3e',
+      'line-width': 5,
+      'line-opacity': 0.85,
+    },
+  });
+
+  map.on('click', 'tour-tracks-layer', (e) => {
+    if (e.features && e.features.length > 0) {
+      const segId = e.features[0].properties.segmentId;
+      const seg = segments.find((s) => s.id === segId) || segments[0];
+      const tourImgs = getImagesForSegment(seg);
+      openGallery(tourImgs, 0);
+    }
+  });
+
+  map.on('mouseenter', 'tour-tracks-layer', () => {
+    map.getCanvas().style.cursor = 'pointer';
+  });
+  map.on('mouseleave', 'tour-tracks-layer', () => {
+    map.getCanvas().style.cursor = '';
+  });
+
+  fitMapBounds(segments);
+  drawImageMarkers(allImages);
+});
+
+function updateMap() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code') || '';
+  const apiUrl = `/api/updates?since=${encodeURIComponent(lastUpdateTime)}&code=${encodeURIComponent(code)}`;
+
+  fetch(apiUrl)
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      return response.json();
+    })
+    .then((data) => {
+      if (data.waypoints && data.waypoints.length > 0) {
+        fetch(`/?code=${encodeURIComponent(code)}`)
+          .then((res) => res.text())
+          .then((html) => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const tourEl = doc.getElementById('tour-data');
+            if (tourEl) {
+              segments = JSON.parse(tourEl.textContent || '[]');
+              const source = map.getSource('tour-tracks');
+              if (source) {
+                source.setData(segmentsToGeoJSON(segments));
+                fitMapBounds(segments);
+              }
+            }
+          })
+          .catch((err) => console.error('Error refreshing path:', err));
+      }
+
+      if (data.images && Array.isArray(data.images)) {
+        allImages = data.images;
+        drawImageMarkers(allImages);
+      }
+
+      if (data.lastModified) {
+        lastUpdateTime = data.lastModified;
+      }
+    })
+    .catch((error) => {
+      console.error('Error fetching updates:', error);
+    });
+}
+
+setInterval(updateMap, 30000);

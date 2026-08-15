@@ -160,8 +160,8 @@ func TestStore_GetUpdates(t *testing.T) {
 	if len(segs) != 1 {
 		t.Fatalf("expected 1 segment, got %d", len(segs))
 	}
-	if len(segs[0]) != 2 {
-		t.Errorf("expected 2 waypoints in update, got %d", len(segs[0]))
+	if len(segs[0].Coords) != 2 {
+		t.Errorf("expected 2 waypoints in update, got %d", len(segs[0].Coords))
 	}
 	if !lastMod.Equal(t0.Add(2 * time.Hour)) {
 		t.Errorf("expected lastModified = %v, got %v", t0.Add(2*time.Hour), lastMod)

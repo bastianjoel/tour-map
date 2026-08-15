@@ -22,7 +22,7 @@ const (
 	serverPort        = ":8080"
 )
 
-//go:embed index.html
+//go:embed web/dist/index.html
 var tmpl string
 
 func main() {

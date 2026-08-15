@@ -3,9 +3,9 @@ package images
 import (
 	"io/fs"
 	"log"
-	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +14,17 @@ import (
 	"tour-map/pkg/geo"
 )
 
-// Scanner scans an images directory and extracts GPS coordinates from image EXIF metadata.
+// ImageInfo holds metadata about an image, including filename, optional GPS location, and timestamp.
+type ImageInfo struct {
+	Filename  string         `json:"filename"`
+	Location  *geo.GPSCoords `json:"location,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
+}
+
+// Scanner scans an images directory and extracts EXIF metadata and GPS coordinates.
 type Scanner struct {
 	imagesDir string
-	locations map[string]geo.GPSCoords
+	images    []ImageInfo
 	mu        sync.RWMutex
 }
 
@@ -25,7 +32,7 @@ type Scanner struct {
 func NewScanner(imagesDir string) *Scanner {
 	return &Scanner{
 		imagesDir: imagesDir,
-		locations: make(map[string]geo.GPSCoords),
+		images:    make([]ImageInfo, 0),
 	}
 }
 
@@ -35,35 +42,55 @@ func IsImageFile(filename string) bool {
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".tiff" || ext == ".tif"
 }
 
-// ExtractGPSCoords extracts GPS coordinates from an image's EXIF data.
-func ExtractGPSCoords(imagePath string) (*geo.GPSCoords, error) {
+// ExtractImageInfo extracts GPS coordinates and timestamp from an image file and its EXIF data.
+func ExtractImageInfo(imagePath string, info fs.FileInfo) ImageInfo {
+	filename := filepath.Base(imagePath)
+	var timestamp time.Time
+	if info != nil {
+		timestamp = info.ModTime()
+	}
+
 	file, err := os.Open(imagePath)
 	if err != nil {
-		return nil, err
+		return ImageInfo{
+			Filename:  filename,
+			Timestamp: timestamp,
+		}
 	}
 	defer file.Close()
 
-	// Decode EXIF data
 	x, err := exif.Decode(file)
 	if err != nil {
-		return nil, err // No EXIF data or corrupted
+		return ImageInfo{
+			Filename:  filename,
+			Timestamp: timestamp,
+		}
 	}
 
-	// Get GPS coordinates
-	lat, lon, err := x.LatLong()
-	if err != nil {
-		return nil, err // No GPS data
+	// Extract timestamp from EXIF if available
+	if exifTime, err := x.DateTime(); err == nil && !exifTime.IsZero() {
+		timestamp = exifTime
 	}
 
-	return &geo.GPSCoords{
-		Latitude:  lat,
-		Longitude: lon,
-	}, nil
+	// Extract GPS coordinates if available
+	var loc *geo.GPSCoords
+	if lat, lon, err := x.LatLong(); err == nil {
+		loc = &geo.GPSCoords{
+			Latitude:  lat,
+			Longitude: lon,
+		}
+	}
+
+	return ImageInfo{
+		Filename:  filename,
+		Location:  loc,
+		Timestamp: timestamp,
+	}
 }
 
-// Scan walks the images directory and updates the GPS locations map.
+// Scan walks the images directory, extracts metadata for all images, and sorts them by date.
 func (s *Scanner) Scan() error {
-	newGPSData := make(map[string]geo.GPSCoords)
+	newImages := make([]ImageInfo, 0)
 
 	if _, err := os.Stat(s.imagesDir); os.IsNotExist(err) {
 		return nil
@@ -75,16 +102,13 @@ func (s *Scanner) Scan() error {
 		}
 
 		if !d.IsDir() && IsImageFile(path) {
-			coords, err := ExtractGPSCoords(path)
+			info, err := d.Info()
 			if err != nil {
-				log.Printf("Error extracting GPS from %s: %v", filepath.Base(path), err)
-				return nil
+				log.Printf("Error getting file info for %s: %v", path, err)
 			}
 
-			if coords != nil {
-				filename := filepath.Base(path)
-				newGPSData[filename] = *coords
-			}
+			imgInfo := ExtractImageInfo(path, info)
+			newImages = append(newImages, imgInfo)
 		}
 
 		return nil
@@ -95,19 +119,38 @@ func (s *Scanner) Scan() error {
 		return err
 	}
 
+	// Sort images chronologically by date
+	slices.SortFunc(newImages, func(a, b ImageInfo) int {
+		return a.Timestamp.Compare(b.Timestamp)
+	})
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.locations = newGPSData
+	s.images = newImages
 	return nil
 }
 
-// GetLocations returns a copy of the detected image GPS coordinates.
+// GetImages returns a sorted copy of all discovered images.
+func (s *Scanner) GetImages() []ImageInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	res := make([]ImageInfo, len(s.images))
+	copy(res, s.images)
+	return res
+}
+
+// GetLocations returns a map of filename to GPSCoords for images that have GPS data.
 func (s *Scanner) GetLocations() map[string]geo.GPSCoords {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	res := make(map[string]geo.GPSCoords, len(s.locations))
-	maps.Copy(res, s.locations)
+	res := make(map[string]geo.GPSCoords)
+	for _, img := range s.images {
+		if img.Location != nil {
+			res[img.Filename] = *img.Location
+		}
+	}
 	return res
 }
 

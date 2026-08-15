@@ -125,7 +125,7 @@ func TestServer_HandleUpdates(t *testing.T) {
 		t.Fatalf("failed to decode JSON response: %v", err)
 	}
 
-	if len(resp.Waypoints) != 1 || len(resp.Waypoints[0]) != 1 {
+	if len(resp.Waypoints) != 1 || len(resp.Waypoints[0].Coords) != 1 {
 		t.Errorf("expected 1 segment with 1 waypoint, got %v", resp.Waypoints)
 	}
 
@@ -243,7 +243,7 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 	end := strings.Index(body, suffix)
 	jsonData := body[start:end]
 
-	var segments [][][2]float64
+	var segments []geo.Segment
 	if err := json.Unmarshal([]byte(jsonData), &segments); err != nil {
 		t.Fatalf("failed to parse segments JSON: %v, body was %q", err, jsonData)
 	}
@@ -251,7 +251,7 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 	if len(segments) != 2 {
 		t.Fatalf("expected 2 distinct trip segments, got %d", len(segments))
 	}
-	if len(segments[0]) != 2 || len(segments[1]) != 2 {
+	if len(segments[0].Coords) != 2 || len(segments[1].Coords) != 2 {
 		t.Errorf("unexpected points per segment: %v", segments)
 	}
 }

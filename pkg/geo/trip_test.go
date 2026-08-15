@@ -19,8 +19,11 @@ func TestSegmentWaypoints_WithinLimits(t *testing.T) {
 	if len(segments) != 1 {
 		t.Fatalf("expected 1 segment, got %d", len(segments))
 	}
-	if len(segments[0]) != 3 {
-		t.Fatalf("expected 3 points in segment 0, got %d", len(segments[0]))
+	if len(segments[0].Coords) != 3 {
+		t.Fatalf("expected 3 points in segment 0, got %d", len(segments[0].Coords))
+	}
+	if !segments[0].StartTime.Equal(baseTime) || !segments[0].EndTime.Equal(baseTime.Add(20*time.Minute)) {
+		t.Errorf("unexpected segment timeframe: %v to %v", segments[0].StartTime, segments[0].EndTime)
 	}
 }
 
@@ -39,11 +42,11 @@ func TestSegmentWaypoints_DistanceSplit(t *testing.T) {
 	if len(segments) != 2 {
 		t.Fatalf("expected 2 segments due to >10km distance, got %d", len(segments))
 	}
-	if len(segments[0]) != 2 {
-		t.Errorf("expected 2 points in trip 1, got %d", len(segments[0]))
+	if len(segments[0].Coords) != 2 {
+		t.Errorf("expected 2 points in trip 1, got %d", len(segments[0].Coords))
 	}
-	if len(segments[1]) != 2 {
-		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1]))
+	if len(segments[1].Coords) != 2 {
+		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1].Coords))
 	}
 }
 
@@ -62,11 +65,11 @@ func TestSegmentWaypoints_TimeSplit(t *testing.T) {
 	if len(segments) != 2 {
 		t.Fatalf("expected 2 segments due to >7 days time gap, got %d", len(segments))
 	}
-	if len(segments[0]) != 2 {
-		t.Errorf("expected 2 points in trip 1, got %d", len(segments[0]))
+	if len(segments[0].Coords) != 2 {
+		t.Errorf("expected 2 points in trip 1, got %d", len(segments[0].Coords))
 	}
-	if len(segments[1]) != 2 {
-		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1]))
+	if len(segments[1].Coords) != 2 {
+		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1].Coords))
 	}
 }
 
@@ -82,7 +85,7 @@ func TestSegmentWaypoints_BoundaryTests(t *testing.T) {
 	if len(segments) != 2 {
 		t.Fatalf("expected 2 segments, got %d", len(segments))
 	}
-	if len(segments[0]) != 2 || len(segments[1]) != 1 {
+	if len(segments[0].Coords) != 2 || len(segments[1].Coords) != 1 {
 		t.Errorf("unexpected segment lengths: %v", segments)
 	}
 }
@@ -101,7 +104,7 @@ func TestSegmentWaypoints_EdgeCases(t *testing.T) {
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: time.Now()},
 	}
 	res := SegmentWaypoints(single, 10.0, 7*24*time.Hour)
-	if len(res) != 1 || len(res[0]) != 1 {
+	if len(res) != 1 || len(res[0].Coords) != 1 {
 		t.Errorf("expected 1 segment with 1 point for single waypoint, got %v", res)
 	}
 
@@ -112,7 +115,7 @@ func TestSegmentWaypoints_EdgeCases(t *testing.T) {
 		{Location: nil, Timestamp: time.Now()},
 	}
 	resNil := SegmentWaypoints(withNil, 10.0, 7*24*time.Hour)
-	if len(resNil) != 1 || len(resNil[0]) != 1 {
+	if len(resNil) != 1 || len(resNil[0].Coords) != 1 {
 		t.Errorf("expected 1 segment with 1 point, got %v", resNil)
 	}
 }
@@ -120,12 +123,6 @@ func TestSegmentWaypoints_EdgeCases(t *testing.T) {
 func TestFilterPrivacy(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// Points:
-	// p0: Paris (far away from Munich, > 600km)
-	// p1: Munich City Center (last waypoint)
-	// p2: Munich 2km away from p1
-	// p3: Munich 5km away from p1
-	// p4: Munich center (same as p1)
 	p0 := Waypoint{Location: &GPSCoords{Latitude: 48.8566, Longitude: 2.3522}, Timestamp: baseTime}
 	p1 := Waypoint{Location: &GPSCoords{Latitude: 48.1351, Longitude: 11.5820}, Timestamp: baseTime.Add(1 * time.Hour)}
 	p2 := Waypoint{Location: &GPSCoords{Latitude: 48.1400, Longitude: 11.5850}, Timestamp: baseTime.Add(2 * time.Hour)}
