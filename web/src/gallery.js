@@ -1,12 +1,12 @@
 // Gallery controller
-import { t, formatDate, applyStaticTranslations } from './i18n.js';
+import { t, formatDate, applyStaticTranslations } from "./i18n.js";
 
-const galleryModal = document.getElementById('gallery-modal');
-const galleryMainImg = document.getElementById('gallery-main-img');
-const galleryCounter = document.getElementById('gallery-counter');
-const galleryDate = document.getElementById('gallery-date');
-const galleryFocusBtn = document.getElementById('gallery-focus-btn');
-const galleryThumbs = document.getElementById('gallery-thumbs');
+const galleryModal = document.getElementById("gallery-modal");
+const galleryMainImg = document.getElementById("gallery-main-img");
+const galleryCounter = document.getElementById("gallery-counter");
+const galleryDate = document.getElementById("gallery-date");
+const galleryFocusBtn = document.getElementById("gallery-focus-btn");
+const galleryThumbs = document.getElementById("gallery-thumbs");
 
 let activeTourImages = [];
 let currentImageIndex = 0;
@@ -17,40 +17,40 @@ export function setGalleryMap(map) {
 }
 
 export function showToast(message) {
-  const toast = document.getElementById('toast');
+  const toast = document.getElementById("toast");
   if (!toast) return;
   toast.textContent = message;
-  toast.classList.add('show');
+  toast.classList.add("show");
   setTimeout(() => {
-    toast.classList.remove('show');
+    toast.classList.remove("show");
   }, 3000);
 }
 
 function renderThumbnails() {
   if (!galleryThumbs) return;
-  galleryThumbs.innerHTML = '';
+  galleryThumbs.innerHTML = "";
 
   activeTourImages.forEach((img, idx) => {
-    const item = document.createElement('div');
-    item.className = `gallery-thumb-item ${idx === currentImageIndex ? 'active' : ''}`;
+    const item = document.createElement("div");
+    item.className = `gallery-thumb-item ${idx === currentImageIndex ? "active" : ""}`;
     item.id = `thumb-${idx}`;
 
-    const thumbImg = document.createElement('img');
-    thumbImg.className = 'gallery-thumb-img';
+    const thumbImg = document.createElement("img");
+    thumbImg.className = "gallery-thumb-img";
     thumbImg.src = `/images/${encodeURI(img.filename)}`;
-    thumbImg.alt = img.filename || t('imageAlt');
-    thumbImg.loading = 'lazy';
+    thumbImg.alt = img.filename || t("imageAlt");
+    thumbImg.loading = "lazy";
 
     item.appendChild(thumbImg);
 
     if (img.location && img.location.lat) {
-      const geoIcon = document.createElement('span');
-      geoIcon.className = 'gallery-thumb-geo-icon';
-      geoIcon.textContent = '📍';
+      const geoIcon = document.createElement("span");
+      geoIcon.className = "gallery-thumb-geo-icon";
+      geoIcon.textContent = "📍";
       item.appendChild(geoIcon);
     }
 
-    item.addEventListener('click', () => {
+    item.addEventListener("click", () => {
       showImage(idx);
     });
 
@@ -67,10 +67,14 @@ export function showImage(index) {
   const img = activeTourImages[currentImageIndex];
   if (galleryMainImg) {
     galleryMainImg.src = `/images/${encodeURI(img.filename)}`;
-    galleryMainImg.alt = img.filename || t('imageAlt');
+    galleryMainImg.alt = img.filename || t("imageAlt");
   }
   if (galleryCounter) {
-    galleryCounter.textContent = t('photoOf', currentImageIndex + 1, activeTourImages.length);
+    galleryCounter.textContent = t(
+      "photoOf",
+      currentImageIndex + 1,
+      activeTourImages.length,
+    );
   }
   if (galleryDate) {
     galleryDate.textContent = formatDate(img.timestamp);
@@ -79,8 +83,8 @@ export function showImage(index) {
   // Configure "Focus on Map" button
   if (galleryFocusBtn) {
     if (img.location && img.location.lat && img.location.lng) {
-      galleryFocusBtn.style.display = 'inline-flex';
-      galleryFocusBtn.textContent = t('focusOnMap');
+      galleryFocusBtn.style.display = "inline-flex";
+      galleryFocusBtn.textContent = t("focusOnMap");
       galleryFocusBtn.onclick = () => {
         if (mapInstance) {
           mapInstance.flyTo({
@@ -92,37 +96,41 @@ export function showImage(index) {
         closeGallery();
       };
     } else {
-      galleryFocusBtn.style.display = 'none';
+      galleryFocusBtn.style.display = "none";
       galleryFocusBtn.onclick = null;
     }
   }
 
   // Highlight active thumbnail and scroll into view
-  document.querySelectorAll('.gallery-thumb-item').forEach((el, i) => {
-    el.classList.toggle('active', i === currentImageIndex);
+  document.querySelectorAll(".gallery-thumb-item").forEach((el, i) => {
+    el.classList.toggle("active", i === currentImageIndex);
   });
   const activeThumb = document.getElementById(`thumb-${currentImageIndex}`);
   if (activeThumb) {
-    activeThumb.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    activeThumb.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
   }
 }
 
 export function openGallery(imagesToDisplay, startIndex = 0) {
   if (!imagesToDisplay || imagesToDisplay.length === 0) {
-    showToast(t('noPhotos'));
+    showToast(t("noPhotos"));
     return;
   }
   activeTourImages = imagesToDisplay;
   renderThumbnails();
   if (galleryModal) {
-    galleryModal.classList.add('open');
+    galleryModal.classList.add("open");
   }
   showImage(startIndex);
 }
 
 export function closeGallery() {
   if (galleryModal) {
-    galleryModal.classList.remove('open');
+    galleryModal.classList.remove("open");
   }
 }
 
@@ -130,18 +138,20 @@ export function closeGallery() {
 export function initGalleryEvents() {
   applyStaticTranslations();
 
-  const closeBtn = document.getElementById('gallery-close-btn');
-  const prevBtn = document.getElementById('gallery-prev-btn');
-  const nextBtn = document.getElementById('gallery-next-btn');
+  const closeBtn = document.getElementById("gallery-close-btn");
+  const prevBtn = document.getElementById("gallery-prev-btn");
+  const nextBtn = document.getElementById("gallery-next-btn");
 
-  if (closeBtn) closeBtn.addEventListener('click', closeGallery);
-  if (prevBtn) prevBtn.addEventListener('click', () => showImage(currentImageIndex - 1));
-  if (nextBtn) nextBtn.addEventListener('click', () => showImage(currentImageIndex + 1));
+  if (closeBtn) closeBtn.addEventListener("click", closeGallery);
+  if (prevBtn)
+    prevBtn.addEventListener("click", () => showImage(currentImageIndex - 1));
+  if (nextBtn)
+    nextBtn.addEventListener("click", () => showImage(currentImageIndex + 1));
 
-  window.addEventListener('keydown', (e) => {
-    if (galleryModal && !galleryModal.classList.contains('open')) return;
-    if (e.key === 'Escape') closeGallery();
-    if (e.key === 'ArrowLeft') showImage(currentImageIndex - 1);
-    if (e.key === 'ArrowRight') showImage(currentImageIndex + 1);
+  window.addEventListener("keydown", (e) => {
+    if (galleryModal && !galleryModal.classList.contains("open")) return;
+    if (e.key === "Escape") closeGallery();
+    if (e.key === "ArrowLeft") showImage(currentImageIndex - 1);
+    if (e.key === "ArrowRight") showImage(currentImageIndex + 1);
   });
 }

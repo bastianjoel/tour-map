@@ -1,11 +1,15 @@
-import maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
-import './style.css';
-import { openGallery, setGalleryMap, initGalleryEvents } from './gallery.js';
-import { formatDate, applyStaticTranslations } from './i18n.js';
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import "./style.css";
+import { openGallery, setGalleryMap, initGalleryEvents } from "./gallery.js";
+import { formatDate, applyStaticTranslations } from "./i18n.js";
 
-let segments = JSON.parse(document.getElementById('tour-data')?.textContent || '[]');
-let allImages = JSON.parse(document.getElementById('image-data')?.textContent || '[]');
+let segments = JSON.parse(
+  document.getElementById("tour-data")?.textContent || "[]",
+);
+let allImages = JSON.parse(
+  document.getElementById("image-data")?.textContent || "[]",
+);
 const imageMarkers = {};
 let lastUpdateTime = new Date().toISOString();
 
@@ -15,22 +19,23 @@ if (!Array.isArray(segments)) segments = [];
 applyStaticTranslations();
 
 const map = new maplibregl.Map({
-  container: 'map',
+  container: "map",
   style: {
     version: 8,
     sources: {
-      'osm-tiles': {
-        type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      "osm-tiles": {
+        type: "raster",
+        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
         tileSize: 256,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       },
     },
     layers: [
       {
-        id: 'osm-tiles-layer',
-        type: 'raster',
-        source: 'osm-tiles',
+        id: "osm-tiles-layer",
+        type: "raster",
+        source: "osm-tiles",
         minzoom: 0,
         maxzoom: 19,
       },
@@ -40,7 +45,7 @@ const map = new maplibregl.Map({
   zoom: 10,
 });
 
-map.addControl(new maplibregl.NavigationControl(), 'top-right');
+map.addControl(new maplibregl.NavigationControl(), "top-right");
 setGalleryMap(map);
 initGalleryEvents();
 
@@ -74,13 +79,13 @@ function segmentsToGeoJSON(segs) {
           if (Array.isArray(line.coords) && line.coords.length >= 2) {
             const coordinates = line.coords.map((pt) => [pt[1], pt[0]]);
             features.push({
-              type: 'Feature',
+              type: "Feature",
               properties: {
                 segmentId: segId,
-                lineType: line.type || 'solid',
+                lineType: line.type || "solid",
               },
               geometry: {
-                type: 'LineString',
+                type: "LineString",
                 coordinates: coordinates,
               },
             });
@@ -91,13 +96,13 @@ function segmentsToGeoJSON(segs) {
         if (Array.isArray(coords) && coords.length >= 2) {
           const coordinates = coords.map((pt) => [pt[1], pt[0]]);
           features.push({
-            type: 'Feature',
+            type: "Feature",
             properties: {
               segmentId: segId,
-              lineType: 'solid',
+              lineType: "solid",
             },
             geometry: {
-              type: 'LineString',
+              type: "LineString",
               coordinates: coordinates,
             },
           });
@@ -106,7 +111,7 @@ function segmentsToGeoJSON(segs) {
     }
   }
   return {
-    type: 'FeatureCollection',
+    type: "FeatureCollection",
     features: features,
   };
 }
@@ -141,22 +146,25 @@ function drawImageMarkers(imgs) {
   for (const img of imgs) {
     if (img.location && img.location.lat && img.location.lng) {
       if (!imageMarkers[img.filename]) {
-        const marker = new maplibregl.Marker({ color: '#e53e3e' })
+        const marker = new maplibregl.Marker({ color: "#2AAD27" })
           .setLngLat([img.location.lng, img.location.lat])
           .addTo(map);
 
-        marker.getElement().style.cursor = 'pointer';
+        marker.getElement().style.cursor = "pointer";
 
         const seg = findSegmentForImage(img);
         if (seg) {
-          marker.getElement().addEventListener('click', (e) => {
+          marker.getElement().addEventListener("click", (e) => {
             e.stopPropagation();
             const tourImgs = getImagesForSegment(seg);
-            const idx = tourImgs.findIndex((item) => item.filename === img.filename);
+            const idx = tourImgs.findIndex(
+              (item) => item.filename === img.filename,
+            );
             openGallery(tourImgs, idx >= 0 ? idx : 0);
           });
         } else {
-          const popup = new maplibregl.Popup({ offset: 25, maxWidth: 'none' }).setHTML(`
+          const popup = new maplibregl.Popup({ offset: 25, maxWidth: "none" })
+            .setHTML(`
             <div style="text-align: center; color: #0f172a; padding: 4px;">
               <a href="/images/${encodeURI(img.filename)}" target="_blank">
                 <img src="/images/${encodeURI(img.filename)}" style="max-width: 45vh; max-height: 45vw; display: block; border-radius: 4px; margin-bottom: 6px;" />
@@ -173,51 +181,51 @@ function drawImageMarkers(imgs) {
   }
 }
 
-map.on('load', () => {
-  map.addSource('tour-tracks', {
-    type: 'geojson',
+map.on("load", () => {
+  map.addSource("tour-tracks", {
+    type: "geojson",
     data: segmentsToGeoJSON(segments),
   });
 
   // Solid line layer for normal route sections
   map.addLayer({
-    id: 'tour-tracks-solid',
-    type: 'line',
-    source: 'tour-tracks',
-    filter: ['==', ['get', 'lineType'], 'solid'],
+    id: "tour-tracks-solid",
+    type: "line",
+    source: "tour-tracks",
+    filter: ["==", ["get", "lineType"], "solid"],
     layout: {
-      'line-join': 'round',
-      'line-cap': 'round',
+      "line-join": "round",
+      "line-cap": "round",
     },
     paint: {
-      'line-color': '#e53e3e',
-      'line-width': 5,
-      'line-opacity': 0.85,
+      "line-color": "#e53e3e",
+      "line-width": 5,
+      "line-opacity": 0.85,
     },
   });
 
   // Dotted line layer for >2km pauses/gaps in FIT activities
   map.addLayer({
-    id: 'tour-tracks-dotted',
-    type: 'line',
-    source: 'tour-tracks',
-    filter: ['==', ['get', 'lineType'], 'dotted'],
+    id: "tour-tracks-dotted",
+    type: "line",
+    source: "tour-tracks",
+    filter: ["==", ["get", "lineType"], "dotted"],
     layout: {
-      'line-join': 'round',
-      'line-cap': 'round',
+      "line-join": "round",
+      "line-cap": "round",
     },
     paint: {
-      'line-color': '#e53e3e',
-      'line-width': 4,
-      'line-dasharray': [2, 2],
-      'line-opacity': 0.75,
+      "line-color": "#e53e3e",
+      "line-width": 4,
+      "line-dasharray": [2, 2],
+      "line-opacity": 0.75,
     },
   });
 
   // Interactive click and hover handlers on both solid and dotted track segments
-  const trackLayers = ['tour-tracks-solid', 'tour-tracks-dotted'];
+  const trackLayers = ["tour-tracks-solid", "tour-tracks-dotted"];
   trackLayers.forEach((layerId) => {
-    map.on('click', layerId, (e) => {
+    map.on("click", layerId, (e) => {
       if (e.features && e.features.length > 0) {
         const segId = e.features[0].properties.segmentId;
         const seg = segments.find((s) => s.id === segId) || segments[0];
@@ -226,11 +234,11 @@ map.on('load', () => {
       }
     });
 
-    map.on('mouseenter', layerId, () => {
-      map.getCanvas().style.cursor = 'pointer';
+    map.on("mouseenter", layerId, () => {
+      map.getCanvas().style.cursor = "pointer";
     });
-    map.on('mouseleave', layerId, () => {
-      map.getCanvas().style.cursor = '';
+    map.on("mouseleave", layerId, () => {
+      map.getCanvas().style.cursor = "";
     });
   });
 
@@ -240,7 +248,7 @@ map.on('load', () => {
 
 function updateMap() {
   const urlParams = new URLSearchParams(window.location.search);
-  const code = urlParams.get('code') || '';
+  const code = urlParams.get("code") || "";
   const apiUrl = `/api/updates?since=${encodeURIComponent(lastUpdateTime)}&code=${encodeURIComponent(code)}`;
 
   fetch(apiUrl)
@@ -256,18 +264,18 @@ function updateMap() {
           .then((res) => res.text())
           .then((html) => {
             const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const tourEl = doc.getElementById('tour-data');
+            const doc = parser.parseFromString(html, "text/html");
+            const tourEl = doc.getElementById("tour-data");
             if (tourEl) {
-              segments = JSON.parse(tourEl.textContent || '[]');
-              const source = map.getSource('tour-tracks');
+              segments = JSON.parse(tourEl.textContent || "[]");
+              const source = map.getSource("tour-tracks");
               if (source) {
                 source.setData(segmentsToGeoJSON(segments));
                 fitMapBounds(segments);
               }
             }
           })
-          .catch((err) => console.error('Error refreshing path:', err));
+          .catch((err) => console.error("Error refreshing path:", err));
       }
 
       if (data.images && Array.isArray(data.images)) {
@@ -280,7 +288,7 @@ function updateMap() {
       }
     })
     .catch((error) => {
-      console.error('Error fetching updates:', error);
+      console.error("Error fetching updates:", error);
     });
 }
 
