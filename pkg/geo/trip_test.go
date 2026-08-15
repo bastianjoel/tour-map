@@ -25,12 +25,15 @@ func TestSegmentWaypoints_WithinLimits(t *testing.T) {
 	if !segments[0].StartTime.Equal(baseTime) || !segments[0].EndTime.Equal(baseTime.Add(20*time.Minute)) {
 		t.Errorf("unexpected segment timeframe: %v to %v", segments[0].StartTime, segments[0].EndTime)
 	}
+	if len(segments[0].Lines) != 1 || segments[0].Lines[0].Type != "solid" {
+		t.Errorf("expected 1 solid line, got %v", segments[0].Lines)
+	}
 }
 
 func TestSegmentWaypoints_DistanceSplit(t *testing.T) {
 	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
-	// Point 1 and 2 are close in Berlin. Point 3 is in Munich (far > 10 km).
+	// Point 1 and 2 are close in Berlin. Point 3 is in Munich (far > 10 km, no common ActivityID).
 	waypoints := []Waypoint{
 		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime},
 		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(1 * time.Hour)},
@@ -47,6 +50,59 @@ func TestSegmentWaypoints_DistanceSplit(t *testing.T) {
 	}
 	if len(segments[1].Coords) != 2 {
 		t.Errorf("expected 2 points in trip 2, got %d", len(segments[1].Coords))
+	}
+}
+
+func TestSegmentWaypoints_SingleFitFileDottedConnection_2km(t *testing.T) {
+	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+
+	// All 4 points belong to the SAME single FIT activity ("fit:ride1.fit")
+	// Points 1 & 2 are in Berlin (0.1km apart -> solid).
+	// Point 3 is 3km away after a pause (> 2km threshold -> dotted).
+	// Point 4 is close to Point 3 (0.1km apart -> solid).
+	fitID := "fit:ride1.fit"
+	waypoints := []Waypoint{
+		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime, ActivityID: fitID},
+		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(10 * time.Minute), ActivityID: fitID},
+		{Location: &GPSCoords{Latitude: 52.5500, Longitude: 13.4300}, Timestamp: baseTime.Add(40 * time.Minute), ActivityID: fitID}, // ~3.7 km gap (>2km)
+		{Location: &GPSCoords{Latitude: 52.5510, Longitude: 13.4310}, Timestamp: baseTime.Add(50 * time.Minute), ActivityID: fitID},
+	}
+
+	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
+	if len(segments) != 1 {
+		t.Fatalf("expected 1 connected segment for single FIT activity, got %d", len(segments))
+	}
+	if len(segments[0].Coords) != 4 {
+		t.Errorf("expected 4 total coordinates, got %d", len(segments[0].Coords))
+	}
+	if len(segments[0].Lines) != 3 {
+		t.Fatalf("expected 3 sub-lines (solid, dotted, solid), got %d: %v", len(segments[0].Lines), segments[0].Lines)
+	}
+	if segments[0].Lines[0].Type != "solid" {
+		t.Errorf("expected line 0 to be solid, got %s", segments[0].Lines[0].Type)
+	}
+	if segments[0].Lines[1].Type != "dotted" {
+		t.Errorf("expected line 1 to be dotted for >2km pause, got %s", segments[0].Lines[1].Type)
+	}
+	if segments[0].Lines[2].Type != "solid" {
+		t.Errorf("expected line 2 to be solid, got %s", segments[0].Lines[2].Type)
+	}
+}
+
+func TestSegmentWaypoints_DifferentFitFilesDisconnected(t *testing.T) {
+	baseTime := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+
+	// Points from two DIFFERENT FIT activities (ride1 in Berlin, ride2 in Munich >10km away)
+	waypoints := []Waypoint{
+		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: baseTime, ActivityID: "fit:ride1.fit"},
+		{Location: &GPSCoords{Latitude: 52.5210, Longitude: 13.4060}, Timestamp: baseTime.Add(30 * time.Minute), ActivityID: "fit:ride1.fit"},
+		{Location: &GPSCoords{Latitude: 48.1351, Longitude: 11.5820}, Timestamp: baseTime.Add(2 * time.Hour), ActivityID: "fit:ride2.fit"},
+		{Location: &GPSCoords{Latitude: 48.1360, Longitude: 11.5830}, Timestamp: baseTime.Add(3 * time.Hour), ActivityID: "fit:ride2.fit"},
+	}
+
+	segments := SegmentWaypoints(waypoints, 10.0, 7*24*time.Hour)
+	if len(segments) != 2 {
+		t.Fatalf("expected 2 disconnected segments for different FIT activities, got %d", len(segments))
 	}
 }
 

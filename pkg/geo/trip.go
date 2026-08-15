@@ -13,18 +13,30 @@ const (
 
 	// DefaultPrivacyRadiusKm is the radius within the latest waypoint that is hidden without authorization.
 	DefaultPrivacyRadiusKm = 10.0
+
+	// DefaultDottedPauseDistanceKm is the threshold (>2km) for pauses/gaps within a single FIT activity to be connected via dotted lines.
+	DefaultDottedPauseDistanceKm = 2.0
 )
 
-// Segment represents a distinct connected trip segment with its timeframe and coordinates.
+// PathLine represents a continuous sub-path that is either "solid" (regular ride) or "dotted" (gaps/pauses > 2km within a FIT activity).
+type PathLine struct {
+	Type   string       `json:"type"` // "solid" or "dotted"
+	Coords [][2]float64 `json:"coords"`
+}
+
+// Segment represents a distinct connected trip segment with its timeframe, sub-lines, and full coordinates list.
 type Segment struct {
 	ID        int          `json:"id"`
 	StartTime time.Time    `json:"startTime"`
 	EndTime   time.Time    `json:"endTime"`
+	Lines     []PathLine   `json:"lines"`
 	Coords    [][2]float64 `json:"coords"`
 }
 
-// SegmentWaypoints splits a chronological slice of waypoints into separate trip segments
-// whenever the distance between consecutive points exceeds maxDistanceKm or the time gap exceeds maxTimeGap.
+// SegmentWaypoints splits a chronological slice of waypoints into trip segments.
+// - Points originating from the SAME single FIT activity (matching non-empty ActivityID) are always kept in the same segment.
+//   If a pause/gap between consecutive points in that activity exceeds DefaultDottedPauseDistanceKm (2km), they are connected via a "dotted" line.
+// - Points from different sources/activities separated by >maxDistanceKm or >maxTimeGap are split into separate trip segments.
 func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap time.Duration) []Segment {
 	var validWaypoints []Waypoint
 	for _, wp := range waypoints {
@@ -46,15 +58,47 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 
 	var segments []Segment
 	var currentCoords [][2]float64
+	var currentLines []PathLine
+	var currentSolidLine [][2]float64
 	var currentStart time.Time
 	var currentEnd time.Time
 	segmentID := 0
+
+	flushCurrentSegment := func() {
+		if len(currentSolidLine) >= 2 {
+			currentLines = append(currentLines, PathLine{
+				Type:   "solid",
+				Coords: currentSolidLine,
+			})
+		}
+		if len(currentCoords) > 0 {
+			// If there were points but no lines with >=2 points (e.g. single point), create a solid line
+			if len(currentLines) == 0 && len(currentCoords) >= 2 {
+				currentLines = append(currentLines, PathLine{
+					Type:   "solid",
+					Coords: currentCoords,
+				})
+			}
+			segments = append(segments, Segment{
+				ID:        segmentID,
+				StartTime: currentStart,
+				EndTime:   currentEnd,
+				Lines:     currentLines,
+				Coords:    currentCoords,
+			})
+			segmentID++
+		}
+		currentCoords = nil
+		currentLines = nil
+		currentSolidLine = nil
+	}
 
 	for i, wp := range validWaypoints {
 		coord := [2]float64{wp.Location.Latitude, wp.Location.Longitude}
 
 		if i == 0 {
 			currentCoords = append(currentCoords, coord)
+			currentSolidLine = append(currentSolidLine, coord)
 			currentStart = wp.Timestamp
 			currentEnd = wp.Timestamp
 			continue
@@ -71,35 +115,50 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 			timeDiff = -timeDiff
 		}
 
-		if dist > maxDistanceKm || timeDiff > maxTimeGap {
-			// Disconnect: close current segment and start a new trip segment
-			if len(currentCoords) > 0 {
-				segments = append(segments, Segment{
-					ID:        segmentID,
-					StartTime: currentStart,
-					EndTime:   currentEnd,
-					Coords:    currentCoords,
+		sameActivity := wp.ActivityID != "" && wp.ActivityID == prevWp.ActivityID
+
+		if sameActivity {
+			// Inside the SAME single FIT activity: always connect!
+			// Pauses/gaps > 2km appear as dotted lines.
+			if dist > DefaultDottedPauseDistanceKm {
+				// Flush current solid line
+				if len(currentSolidLine) >= 2 {
+					currentLines = append(currentLines, PathLine{
+						Type:   "solid",
+						Coords: currentSolidLine,
+					})
+				}
+				// Connect the gap with a dotted line between prev point and current point
+				prevCoord := [2]float64{prevWp.Location.Latitude, prevWp.Location.Longitude}
+				currentLines = append(currentLines, PathLine{
+					Type:   "dotted",
+					Coords: [][2]float64{prevCoord, coord},
 				})
-				segmentID++
+				// Start new solid line at current point
+				currentSolidLine = [][2]float64{coord}
+			} else {
+				currentSolidLine = append(currentSolidLine, coord)
 			}
-			currentCoords = [][2]float64{coord}
-			currentStart = wp.Timestamp
-			currentEnd = wp.Timestamp
-		} else {
 			currentCoords = append(currentCoords, coord)
 			currentEnd = wp.Timestamp
+		} else {
+			// Different activities or live tracking
+			if dist > maxDistanceKm || timeDiff > maxTimeGap {
+				// Disconnect: start a new trip segment
+				flushCurrentSegment()
+				currentCoords = [][2]float64{coord}
+				currentSolidLine = [][2]float64{coord}
+				currentStart = wp.Timestamp
+				currentEnd = wp.Timestamp
+			} else {
+				currentSolidLine = append(currentSolidLine, coord)
+				currentCoords = append(currentCoords, coord)
+				currentEnd = wp.Timestamp
+			}
 		}
 	}
 
-	if len(currentCoords) > 0 {
-		segments = append(segments, Segment{
-			ID:        segmentID,
-			StartTime: currentStart,
-			EndTime:   currentEnd,
-			Coords:    currentCoords,
-		})
-	}
-
+	flushCurrentSegment()
 	return segments
 }
 

@@ -11,10 +11,11 @@ type GPSCoords struct {
 	Longitude float64 `json:"lng"`
 }
 
-// Waypoint represents a tracking location point with an update timestamp.
+// Waypoint represents a tracking location point with an update timestamp and optional ActivityID.
 type Waypoint struct {
-	Location  *GPSCoords `json:"location,omitempty"`
-	Timestamp time.Time  `json:"updatedAt"`
+	Location   *GPSCoords `json:"location,omitempty"`
+	Timestamp  time.Time  `json:"updatedAt"`
+	ActivityID string     `json:"activityId,omitempty"`
 }
 
 // DistanceKm calculates the great-circle distance between two GPS coordinates in kilometers using the Haversine formula.

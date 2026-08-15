@@ -65,19 +65,40 @@ function segmentsToGeoJSON(segs) {
   const features = [];
   if (Array.isArray(segs)) {
     for (const segment of segs) {
-      const coords = segment.coords || segment;
-      if (Array.isArray(coords) && coords.length >= 2) {
-        const coordinates = coords.map((pt) => [pt[1], pt[0]]);
-        features.push({
-          type: 'Feature',
-          properties: {
-            segmentId: segment.id !== undefined ? segment.id : 0,
-          },
-          geometry: {
-            type: 'LineString',
-            coordinates: coordinates,
-          },
-        });
+      const segId = segment.id !== undefined ? segment.id : 0;
+      if (Array.isArray(segment.lines) && segment.lines.length > 0) {
+        for (const line of segment.lines) {
+          if (Array.isArray(line.coords) && line.coords.length >= 2) {
+            const coordinates = line.coords.map((pt) => [pt[1], pt[0]]);
+            features.push({
+              type: 'Feature',
+              properties: {
+                segmentId: segId,
+                lineType: line.type || 'solid',
+              },
+              geometry: {
+                type: 'LineString',
+                coordinates: coordinates,
+              },
+            });
+          }
+        }
+      } else {
+        const coords = segment.coords || segment;
+        if (Array.isArray(coords) && coords.length >= 2) {
+          const coordinates = coords.map((pt) => [pt[1], pt[0]]);
+          features.push({
+            type: 'Feature',
+            properties: {
+              segmentId: segId,
+              lineType: 'solid',
+            },
+            geometry: {
+              type: 'LineString',
+              coordinates: coordinates,
+            },
+          });
+        }
       }
     }
   }
@@ -155,10 +176,12 @@ map.on('load', () => {
     data: segmentsToGeoJSON(segments),
   });
 
+  // Solid line layer for normal route sections
   map.addLayer({
-    id: 'tour-tracks-layer',
+    id: 'tour-tracks-solid',
     type: 'line',
     source: 'tour-tracks',
+    filter: ['==', ['get', 'lineType'], 'solid'],
     layout: {
       'line-join': 'round',
       'line-cap': 'round',
@@ -170,20 +193,42 @@ map.on('load', () => {
     },
   });
 
-  map.on('click', 'tour-tracks-layer', (e) => {
-    if (e.features && e.features.length > 0) {
-      const segId = e.features[0].properties.segmentId;
-      const seg = segments.find((s) => s.id === segId) || segments[0];
-      const tourImgs = getImagesForSegment(seg);
-      openGallery(tourImgs, 0);
-    }
+  // Dotted line layer for >10km pauses/gaps in FIT activities
+  map.addLayer({
+    id: 'tour-tracks-dotted',
+    type: 'line',
+    source: 'tour-tracks',
+    filter: ['==', ['get', 'lineType'], 'dotted'],
+    layout: {
+      'line-join': 'round',
+      'line-cap': 'round',
+    },
+    paint: {
+      'line-color': '#e53e3e',
+      'line-width': 4,
+      'line-dasharray': [2, 2],
+      'line-opacity': 0.75,
+    },
   });
 
-  map.on('mouseenter', 'tour-tracks-layer', () => {
-    map.getCanvas().style.cursor = 'pointer';
-  });
-  map.on('mouseleave', 'tour-tracks-layer', () => {
-    map.getCanvas().style.cursor = '';
+  // Interactive click and hover handlers on both solid and dotted track segments
+  const trackLayers = ['tour-tracks-solid', 'tour-tracks-dotted'];
+  trackLayers.forEach((layerId) => {
+    map.on('click', layerId, (e) => {
+      if (e.features && e.features.length > 0) {
+        const segId = e.features[0].properties.segmentId;
+        const seg = segments.find((s) => s.id === segId) || segments[0];
+        const tourImgs = getImagesForSegment(seg);
+        openGallery(tourImgs, 0);
+      }
+    });
+
+    map.on('mouseenter', layerId, () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', layerId, () => {
+      map.getCanvas().style.cursor = '';
+    });
   });
 
   fitMapBounds(segments);

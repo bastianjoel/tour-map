@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/muktihari/fit/decoder"
 	"github.com/muktihari/fit/profile/basetype"
@@ -10,7 +11,8 @@ import (
 	"tour-map/pkg/geo"
 )
 
-// ParseFitFile parses a Garmin/FIT activity file and extracts timestamped GPS waypoints.
+// ParseFitFile parses a Garmin/FIT activity file and extracts timestamped GPS waypoints,
+// assigning a unique ActivityID corresponding to the FIT file.
 func ParseFitFile(path string) ([]geo.Waypoint, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -20,6 +22,7 @@ func ParseFitFile(path string) ([]geo.Waypoint, error) {
 
 	dec := decoder.New(file)
 	var waypoints []geo.Waypoint
+	activityID := "fit:" + filepath.Base(path)
 
 	for dec.Next() {
 		fitFile, err := dec.Decode()
@@ -42,7 +45,8 @@ func ParseFitFile(path string) ([]geo.Waypoint, error) {
 						Latitude:  lat,
 						Longitude: lng,
 					},
-					Timestamp: record.Timestamp,
+					Timestamp:  record.Timestamp,
+					ActivityID: activityID,
 				})
 			}
 		}
