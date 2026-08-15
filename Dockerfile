@@ -20,11 +20,12 @@ ENV CGO_ENABLED=0
 RUN go build -ldflags="-s -w" -o /app/tour-map .
 
 FROM alpine:3.21
+WORKDIR /app
 
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY --from=backend /app/tour-map /app/tour-map
+COPY --from=backend /app/tour-map /tour-map
 
 EXPOSE 8080
 
-CMD ["/app/tour-map"]
+CMD ["/tour-map"]
