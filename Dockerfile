@@ -5,8 +5,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY main.go ./
-COPY index.html ./
+COPY . ./
 
 RUN GOOS=linux go build -o /tour-map
 

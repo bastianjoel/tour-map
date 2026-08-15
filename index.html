@@ -26,60 +26,87 @@
     {{.Images}}
   </script>
   <script>
-    let map = L.map('map').setView([51.505, -0.09], 13);
+    const map = L.map('map').setView([51.505, -0.09], 13);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
-    const path = L.featureGroup();
-    const positions = JSON.parse(document.getElementById('tour-data').textContent || '[]');
-    for (let i = 1; i < positions.length; i++) {
-      L.polyline([positions[i - 1], positions[i]], {
-        color: "red"
-      }).addTo(path);
+
+    const path = L.featureGroup().addTo(map);
+    const initialTourData = document.getElementById('tour-data').textContent || '[]';
+    const segments = JSON.parse(initialTourData);
+
+    function drawSegments(segs) {
+      path.clearLayers();
+      if (!Array.isArray(segs)) return;
+      for (const segment of segs) {
+        if (Array.isArray(segment) && segment.length >= 1) {
+          L.polyline(segment, {
+            color: "red"
+          }).addTo(path);
+        }
+      }
     }
 
-    path.addTo(map);
-    map.fitBounds(path.getBounds(), {
-      animate: false,
-      padding: [20, 20],
-    });
+    drawSegments(segments);
 
-    const images = JSON.parse(document.getElementById('image-data').textContent || '[]');
-    for (const [filename, coords] of Object.entries(images)) {
-      const marker = L.marker(coords).addTo(map);
-      marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
+    if (path.getLayers().length > 0) {
+      try {
+        const bounds = path.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, {
+            animate: false,
+            padding: [20, 20],
+          });
+        }
+      } catch (e) {
+        console.error('Error fitting bounds:', e);
+      }
     }
+
+    const initialImageData = document.getElementById('image-data').textContent || '{}';
+    const images = JSON.parse(initialImageData);
+    const imageMarkers = {};
+
+    function drawImages(imgs) {
+      if (!imgs || typeof imgs !== 'object') return;
+      for (const [filename, coords] of Object.entries(imgs)) {
+        if (!imageMarkers[filename]) {
+          const marker = L.marker(coords).addTo(map);
+          marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
+          imageMarkers[filename] = marker;
+        }
+      }
+    }
+
+    drawImages(images);
 
     // Fetch page and update map every 30 seconds
+    let currentSegmentsJSON = initialTourData;
     function updateMap() {
       fetch(window.location.href)
         .then(response => response.text())
         .then(html => {
           const parser = new DOMParser();
           const doc = parser.parseFromString(html, 'text/html');
-          const newTourData = doc.getElementById('tour-data').textContent;
-          const newImageData = doc.getElementById('image-data').textContent;
+          const tourEl = doc.getElementById('tour-data');
+          const imageEl = doc.getElementById('image-data');
 
-          // Update path
-          const newPositions = JSON.parse(newTourData || '[]');
-          if (newPositions.length !== positions.length) {
-            path.clearLayers();
-            for (let i = 1; i < newPositions.length; i++) {
-              L.polyline([newPositions[i - 1], newPositions[i]], {
-                color: "red"
-              }).addTo(path);
-            }
+          if (!tourEl || !imageEl) return;
+
+          const newTourData = tourEl.textContent;
+          const newImageData = imageEl.textContent;
+
+          // Update path if changed
+          if (newTourData !== currentSegmentsJSON) {
+            currentSegmentsJSON = newTourData;
+            const newSegments = JSON.parse(newTourData || '[]');
+            drawSegments(newSegments);
           }
 
           // Update images
-          const newImages = JSON.parse(newImageData || '[]');
-          for (const [filename, coords] of Object.entries(newImages)) {
-            if (!images.hasOwnProperty(filename)) {
-              const marker = L.marker(coords).addTo(map);
-              marker.bindPopup(`<a href='/images/${filename}' target='_blank'><img src='/images/${filename}' style='max-width:50vh; max-height:50vw;' /></a>`, { maxWidth: "auto" });
-            }
-          }
+          const newImages = JSON.parse(newImageData || '{}');
+          drawImages(newImages);
         })
         .catch(error => console.error('Error fetching updated data:', error));
     }
