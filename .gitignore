@@ -1,5 +1,11 @@
-data
-images
-tracking_token.txt
-codes.txt
-tour-map
+/data
+/fit
+/images
+/tracking_token.txt
+/codes.txt
+/tour-map
+/web/node_modules
+/web/dist
+dist
+coverage.out
+tracking.txt
