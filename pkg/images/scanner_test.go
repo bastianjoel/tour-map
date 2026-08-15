@@ -35,6 +35,13 @@ func TestIsImageFile(t *testing.T) {
 	}
 }
 
+func TestExtractExifTimestamp_Nil(t *testing.T) {
+	_, ok := ExtractExifTimestamp(nil)
+	if ok {
+		t.Errorf("expected false for nil exif")
+	}
+}
+
 func TestScanner_NonExistentDir(t *testing.T) {
 	scanner := NewScanner("/path/that/does/not/exist", "")
 	err := scanner.Scan()
