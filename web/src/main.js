@@ -1,7 +1,8 @@
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { openGallery, formatDate, setGalleryMap, initGalleryEvents } from './gallery.js';
+import { openGallery, setGalleryMap, initGalleryEvents } from './gallery.js';
+import { formatDate, applyStaticTranslations } from './i18n.js';
 
 let segments = JSON.parse(document.getElementById('tour-data')?.textContent || '[]');
 let allImages = JSON.parse(document.getElementById('image-data')?.textContent || '[]');
@@ -10,6 +11,8 @@ let lastUpdateTime = new Date().toISOString();
 
 if (!Array.isArray(allImages)) allImages = [];
 if (!Array.isArray(segments)) segments = [];
+
+applyStaticTranslations();
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -193,7 +196,7 @@ map.on('load', () => {
     },
   });
 
-  // Dotted line layer for >10km pauses/gaps in FIT activities
+  // Dotted line layer for >2km pauses/gaps in FIT activities
   map.addLayer({
     id: 'tour-tracks-dotted',
     type: 'line',

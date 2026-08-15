@@ -1,4 +1,5 @@
 // Gallery controller
+import { t, formatDate, applyStaticTranslations } from './i18n.js';
 
 const galleryModal = document.getElementById('gallery-modal');
 const galleryMainImg = document.getElementById('gallery-main-img');
@@ -13,20 +14,6 @@ let mapInstance = null;
 
 export function setGalleryMap(map) {
   mapInstance = map;
-}
-
-export function formatDate(dateStr) {
-  if (!dateStr) return 'Date unknown';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 }
 
 export function showToast(message) {
@@ -51,7 +38,7 @@ function renderThumbnails() {
     const thumbImg = document.createElement('img');
     thumbImg.className = 'gallery-thumb-img';
     thumbImg.src = `/images/${encodeURIComponent(img.filename)}`;
-    thumbImg.alt = img.filename;
+    thumbImg.alt = img.filename || t('imageAlt');
     thumbImg.loading = 'lazy';
 
     item.appendChild(thumbImg);
@@ -80,9 +67,10 @@ export function showImage(index) {
   const img = activeTourImages[currentImageIndex];
   if (galleryMainImg) {
     galleryMainImg.src = `/images/${encodeURIComponent(img.filename)}`;
+    galleryMainImg.alt = img.filename || t('imageAlt');
   }
   if (galleryCounter) {
-    galleryCounter.textContent = `Photo ${currentImageIndex + 1} of ${activeTourImages.length}`;
+    galleryCounter.textContent = t('photoOf', currentImageIndex + 1, activeTourImages.length);
   }
   if (galleryDate) {
     galleryDate.textContent = formatDate(img.timestamp);
@@ -92,6 +80,7 @@ export function showImage(index) {
   if (galleryFocusBtn) {
     if (img.location && img.location.lat && img.location.lng) {
       galleryFocusBtn.style.display = 'inline-flex';
+      galleryFocusBtn.textContent = t('focusOnMap');
       galleryFocusBtn.onclick = () => {
         if (mapInstance) {
           mapInstance.flyTo({
@@ -120,7 +109,7 @@ export function showImage(index) {
 
 export function openGallery(imagesToDisplay, startIndex = 0) {
   if (!imagesToDisplay || imagesToDisplay.length === 0) {
-    showToast('No photos recorded for this tour');
+    showToast(t('noPhotos'));
     return;
   }
   activeTourImages = imagesToDisplay;
@@ -139,6 +128,8 @@ export function closeGallery() {
 
 // Attach event listeners
 export function initGalleryEvents() {
+  applyStaticTranslations();
+
   const closeBtn = document.getElementById('gallery-close-btn');
   const prevBtn = document.getElementById('gallery-prev-btn');
   const nextBtn = document.getElementById('gallery-next-btn');
