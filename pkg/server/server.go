@@ -101,7 +101,7 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	segments, lastModified := s.store.GetUpdates(since, code)
-	allImages := s.imageScanner.GetImages()
+	allImages := s.store.InterpolateImageLocations(s.imageScanner.GetImages())
 
 	response := UpdateResponse{
 		Waypoints:    segments,
@@ -125,7 +125,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	segments := s.store.GetTripSegments(code)
-	allImages := s.imageScanner.GetImages()
+	allImages := s.store.InterpolateImageLocations(s.imageScanner.GetImages())
 
 	imagesJSON, err := json.Marshal(allImages)
 	if err != nil {

@@ -98,7 +98,12 @@ func parseGPSDateTime(x *exif.Exif) (time.Time, bool) {
 }
 
 // ExtractExifTimestamp attempts to extract the capture date from EXIF metadata.
-// It prioritizes GPS Date/Time, followed by DateTimeOriginal, DateTimeDigitized, and DateTime.
+// It checks in priority order:
+// 1. GPS Date/Time (GPSDateStamp & GPSTimeStamp in UTC)
+// 2. Date/Time Original (DateTimeOriginal 0x9003)
+// 3. Create Date (DateTimeDigitized 0x9004)
+// 4. Modify Date (DateTime 0x0132)
+// Non-timezone EXIF timestamps from digital cameras are interpreted in time.Local and converted to UTC.
 func ExtractExifTimestamp(x *exif.Exif) (time.Time, bool) {
 	if x == nil {
 		return time.Time{}, false
@@ -109,6 +114,20 @@ func ExtractExifTimestamp(x *exif.Exif) (time.Time, bool) {
 		return gpsTime, true
 	}
 
+	// Check for timezone offset tag if provided by camera (OffsetTimeOriginal, OffsetTimeDigitized, OffsetTime)
+	var tzOffset string
+	for _, offsetTag := range []exif.FieldName{"OffsetTimeOriginal", "OffsetTimeDigitized", "OffsetTime"} {
+		if tag, err := x.Get(offsetTag); err == nil {
+			if val, err := tag.StringVal(); err == nil {
+				val = strings.Trim(val, "\x00 \"'\n\r\t")
+				if len(val) == 6 && (val[0] == '+' || val[0] == '-') {
+					tzOffset = val
+					break
+				}
+			}
+		}
+	}
+
 	dateFormats := []string{
 		"2006:01:02 15:04:05",
 		"2006-01-02 15:04:05",
@@ -117,18 +136,31 @@ func ExtractExifTimestamp(x *exif.Exif) (time.Time, bool) {
 		time.RFC3339,
 	}
 
-	// Helper to parse string values with multiple format attempts
+	// Helper to parse string values with multiple format attempts and optional timezone offset
 	parseDateString := func(raw string) (time.Time, bool) {
 		clean := strings.Trim(raw, "\x00 \"'\n\r\t")
+		if tzOffset != "" {
+			layout := "2006:01:02 15:04:05 -07:00"
+			if t, err := time.Parse(layout, clean+" "+tzOffset); err == nil && !t.IsZero() {
+				return t.UTC(), true
+			}
+		}
 		for _, layout := range dateFormats {
-			if t, err := time.Parse(layout, clean); err == nil && !t.IsZero() {
-				return t, true
+			if strings.Contains(layout, "Z") || strings.Contains(layout, "-07") {
+				if t, err := time.Parse(layout, clean); err == nil && !t.IsZero() {
+					return t.UTC(), true
+				}
+			} else {
+				// Digicam local wall-clock time -> parse in time.Local and normalize to UTC
+				if t, err := time.ParseInLocation(layout, clean, time.Local); err == nil && !t.IsZero() {
+					return t.UTC(), true
+				}
 			}
 		}
 		return time.Time{}, false
 	}
 
-	// 2. Try DateTimeOriginal (EXIF tag 0x9003) - Time when original photo was taken
+	// 2. Try Date/Time Original (EXIF tag 0x9003) - Time when photo was taken
 	if tag, err := x.Get(exif.DateTimeOriginal); err == nil {
 		if val, err := tag.StringVal(); err == nil {
 			if t, ok := parseDateString(val); ok {
@@ -137,7 +169,7 @@ func ExtractExifTimestamp(x *exif.Exif) (time.Time, bool) {
 		}
 	}
 
-	// 3. Try DateTimeDigitized (EXIF tag 0x9004) - Time when photo was stored/digitized
+	// 3. Try Create Date / DateTimeDigitized (EXIF tag 0x9004) - Time when photo was stored/digitized
 	if tag, err := x.Get(exif.DateTimeDigitized); err == nil {
 		if val, err := tag.StringVal(); err == nil {
 			if t, ok := parseDateString(val); ok {
@@ -148,7 +180,13 @@ func ExtractExifTimestamp(x *exif.Exif) (time.Time, bool) {
 
 	// 4. Try standard DateTime (EXIF tag 0x0132) via goexif DateTime helper
 	if exifTime, err := x.DateTime(); err == nil && !exifTime.IsZero() {
-		return exifTime, true
+		// x.DateTime() parses as UTC by default; normalize to local time offset if no timezone was in EXIF
+		if tzOffset == "" {
+			if t, err := time.ParseInLocation("2006:01:02 15:04:05", exifTime.Format("2006:01:02 15:04:05"), time.Local); err == nil {
+				return t.UTC(), true
+			}
+		}
+		return exifTime.UTC(), true
 	}
 
 	// 5. Try DateTime (EXIF tag 0x0132) manually in case formatting differed
@@ -171,7 +209,7 @@ func ExtractImageInfo(imagePath, relFilename string, info fs.FileInfo) ImageInfo
 
 	var timestamp time.Time
 	if info != nil {
-		timestamp = info.ModTime()
+		timestamp = info.ModTime().UTC()
 	}
 
 	file, err := os.Open(imagePath)
@@ -191,7 +229,7 @@ func ExtractImageInfo(imagePath, relFilename string, info fs.FileInfo) ImageInfo
 		}
 	}
 
-	// Extract timestamp from EXIF if available (preferring GPS Date/Time)
+	// Extract timestamp from EXIF if available (preferring GPS Date/Time, then DateTimeOriginal / CreateDate)
 	if exifDate, ok := ExtractExifTimestamp(x); ok {
 		timestamp = exifDate
 	}

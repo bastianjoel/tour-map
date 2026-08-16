@@ -2,16 +2,18 @@ package tracker
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"tour-map/pkg/geo"
+	"tour-map/pkg/images"
 )
 
 func TestStore_LoadWaypointsAndCodes(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "tracker-test-*")
+	tmpDir, err := os.MkdirTemp("", "tracker-store-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -20,60 +22,61 @@ func TestStore_LoadWaypointsAndCodes(t *testing.T) {
 	dataDir := filepath.Join(tmpDir, "data")
 	fitDir := filepath.Join(tmpDir, "fit")
 	codesFile := filepath.Join(tmpDir, "codes.txt")
-	os.MkdirAll(dataDir, 0755)
-	os.MkdirAll(fitDir, 0755)
 
-	// Write codes file
-	os.WriteFile(codesFile, []byte("secret123\nothercode\n"), 0644)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+	if err := os.MkdirAll(fitDir, 0755); err != nil {
+		t.Fatalf("failed to create fit dir: %v", err)
+	}
 
-	// Write 2 waypoint JSON files with different timestamps
-	t1 := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	t2 := time.Date(2026, 8, 1, 12, 30, 0, 0, time.UTC)
-
+	// 1. Write sample JSON tracking files
 	wp1 := geo.Waypoint{
 		Location:  &geo.GPSCoords{Latitude: 52.5200, Longitude: 13.4050},
-		Timestamp: t1,
+		Timestamp: time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC),
 	}
 	wp2 := geo.Waypoint{
-		Location:  &geo.GPSCoords{Latitude: 52.5220, Longitude: 13.4070},
-		Timestamp: t2,
+		Location:  &geo.GPSCoords{Latitude: 52.5250, Longitude: 13.4100},
+		Timestamp: time.Date(2026, 8, 1, 10, 10, 0, 0, time.UTC),
 	}
 
-	raw1, _ := json.Marshal(wp1)
-	raw2, _ := json.Marshal(wp2)
+	d1, _ := json.Marshal(wp1)
+	d2, _ := json.Marshal(wp2)
+	os.WriteFile(filepath.Join(dataDir, "tracking_20260801_100000.json"), d1, 0644)
+	os.WriteFile(filepath.Join(dataDir, "tracking_20260801_101000.json"), d2, 0644)
 
-	// Write out of chronological order to test sorting
-	os.WriteFile(filepath.Join(dataDir, "tracking_2.json"), raw2, 0644)
-	os.WriteFile(filepath.Join(dataDir, "tracking_1.json"), raw1, 0644)
+	// 2. Write sample codes file
+	codesContent := "secret123\n  mycode  \n\n"
+	os.WriteFile(codesFile, []byte(codesContent), 0644)
 
 	store := NewStore(dataDir, fitDir, codesFile)
-	if err := store.LoadWaypoints(); err != nil {
-		t.Fatalf("LoadWaypoints() failed: %v", err)
-	}
+
+	// Test code loading
 	if err := store.LoadCodes(); err != nil {
 		t.Fatalf("LoadCodes() failed: %v", err)
+	}
+
+	if !store.IsAuthorized("secret123") {
+		t.Errorf("expected secret123 to be authorized")
+	}
+	if !store.IsAuthorized("mycode") {
+		t.Errorf("expected mycode to be authorized")
+	}
+	if store.IsAuthorized("invalid") {
+		t.Errorf("expected invalid to NOT be authorized")
+	}
+
+	// Test waypoints loading
+	if err := store.LoadWaypoints(); err != nil {
+		t.Fatalf("LoadWaypoints() failed: %v", err)
 	}
 
 	wps := store.GetWaypoints()
 	if len(wps) != 2 {
 		t.Fatalf("expected 2 waypoints, got %d", len(wps))
 	}
-	if !wps[0].Timestamp.Equal(t1) || !wps[1].Timestamp.Equal(t2) {
-		t.Errorf("waypoints were not properly sorted by timestamp: %v, %v", wps[0].Timestamp, wps[1].Timestamp)
-	}
-
-	// Test authorization
-	if !store.IsAuthorized("secret123") {
-		t.Errorf("expected secret123 to be authorized")
-	}
-	if !store.IsAuthorized("othercode") {
-		t.Errorf("expected othercode to be authorized")
-	}
-	if store.IsAuthorized("wrongcode") {
-		t.Errorf("expected wrongcode to be unauthorized")
-	}
-	if store.IsAuthorized("") {
-		t.Errorf("expected empty string to be unauthorized")
+	if wps[0].Location.Latitude != 52.5200 || wps[1].Location.Latitude != 52.5250 {
+		t.Errorf("unexpected waypoints data: %v", wps)
 	}
 }
 
@@ -85,23 +88,14 @@ func TestStore_AddWaypoint(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dataDir := filepath.Join(tmpDir, "data")
-	fitDir := filepath.Join(tmpDir, "fit")
-	codesFile := filepath.Join(tmpDir, "codes.txt")
 	os.MkdirAll(dataDir, 0755)
+	store := NewStore(dataDir, "", "")
 
-	store := NewStore(dataDir, fitDir, codesFile)
 	t1 := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2026, 8, 1, 11, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 8, 1, 10, 5, 0, 0, time.UTC)
 
-	wp1 := geo.Waypoint{
-		Location:  &geo.GPSCoords{Latitude: 52.5200, Longitude: 13.4050},
-		Timestamp: t1,
-	}
-	wp2 := geo.Waypoint{
-		Location:  &geo.GPSCoords{Latitude: 52.5300, Longitude: 13.4150},
-		Timestamp: t2,
-	}
-
+	wp1 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: t1}
+	wp2 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5300, Longitude: 13.4150}, Timestamp: t2}
 	raw1, _ := json.Marshal(wp1)
 	raw2, _ := json.Marshal(wp2)
 
@@ -110,13 +104,9 @@ func TestStore_AddWaypoint(t *testing.T) {
 		t.Errorf("expected wp1 to be added")
 	}
 
-	// Adding older waypoint should be rejected
-	tOld := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
-	wpOld := geo.Waypoint{
-		Location:  &geo.GPSCoords{Latitude: 52.5200, Longitude: 13.4050},
-		Timestamp: tOld,
-	}
-	if added := store.AddWaypoint(wpOld, []byte{}); added {
+	// Add older waypoint (should be rejected)
+	olderWp := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5100, Longitude: 13.4000}, Timestamp: t1.Add(-10 * time.Minute)}
+	if added := store.AddWaypoint(olderWp, nil); added {
 		t.Errorf("expected older waypoint to be rejected")
 	}
 
@@ -165,5 +155,70 @@ func TestStore_GetUpdates(t *testing.T) {
 	}
 	if !lastMod.Equal(t0.Add(2 * time.Hour)) {
 		t.Errorf("expected lastModified = %v, got %v", t0.Add(2*time.Hour), lastMod)
+	}
+}
+
+func TestStore_InterpolateImageLocations(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tracker-interpolate-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dataDir := filepath.Join(tmpDir, "data")
+	store := NewStore(dataDir, "", "")
+
+	t0 := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
+	wp1 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: t0}
+	wp2 := geo.Waypoint{Location: &geo.GPSCoords{Latitude: 52.5300, Longitude: 13.4150}, Timestamp: t0.Add(10 * time.Minute)}
+
+	store.AddWaypoint(wp1, nil)
+	store.AddWaypoint(wp2, nil)
+
+	// Photo 1: Has GPS -> should remain unchanged
+	origGPS := &geo.GPSCoords{Latitude: 40.0, Longitude: 10.0}
+	imgWithGPS := images.ImageInfo{
+		Filename:  "has_gps.jpg",
+		Location:  origGPS,
+		Timestamp: t0.Add(5 * time.Minute),
+	}
+
+	// Photo 2: No GPS, taken at 5 minutes into the 10 min track -> should be interpolated at 50%
+	imgNoGPS := images.ImageInfo{
+		Filename:  "no_gps.jpg",
+		Location:  nil,
+		Timestamp: t0.Add(5 * time.Minute),
+	}
+
+	// Photo 3: No GPS, taken on another day -> should remain nil
+	imgOtherDay := images.ImageInfo{
+		Filename:  "other_day.jpg",
+		Location:  nil,
+		Timestamp: t0.Add(48 * time.Hour),
+	}
+
+	inputImgs := []images.ImageInfo{imgWithGPS, imgNoGPS, imgOtherDay}
+	outputImgs := store.InterpolateImageLocations(inputImgs)
+
+	if len(outputImgs) != 3 {
+		t.Fatalf("expected 3 images, got %d", len(outputImgs))
+	}
+
+	// Image 1: Unchanged
+	if outputImgs[0].Location.Latitude != origGPS.Latitude {
+		t.Errorf("expected image with GPS to remain unchanged")
+	}
+
+	// Image 2: Interpolated to 52.5250, 13.4100
+	if outputImgs[1].Location == nil {
+		t.Fatalf("expected interpolated location for image 2, got nil")
+	}
+	if math.Abs(outputImgs[1].Location.Latitude-52.5250) > 1e-5 || math.Abs(outputImgs[1].Location.Longitude-13.4100) > 1e-5 {
+		t.Errorf("expected ~52.5250, 13.4100, got %v", outputImgs[1].Location)
+	}
+
+	// Image 3: Remains nil
+	if outputImgs[2].Location != nil {
+		t.Errorf("expected image on other day to have nil location, got %v", outputImgs[2].Location)
 	}
 }

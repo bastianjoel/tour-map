@@ -13,43 +13,85 @@ import (
 	"time"
 
 	"tour-map/pkg/geo"
+	"tour-map/pkg/images"
 )
 
-// Store manages the in-memory cache of waypoints, access codes, and background updates.
+// Store manages all recorded GPS waypoints and access authorization codes in a thread-safe manner.
 type Store struct {
 	dataDir        string
 	fitDir         string
 	codesFile      string
 	waypoints      []geo.Waypoint
+	codes          map[string]bool
 	latestWaypoint *time.Time
-	codes          map[string]struct{}
 	wpMutex        sync.RWMutex
-	codesMutex     sync.RWMutex
+	codeMutex      sync.RWMutex
 }
 
-// NewStore creates a new waypoint Store.
+// NewStore creates a new Store instance.
 func NewStore(dataDir, fitDir, codesFile string) *Store {
 	return &Store{
 		dataDir:   dataDir,
 		fitDir:    fitDir,
 		codesFile: codesFile,
 		waypoints: make([]geo.Waypoint, 0),
-		codes:     make(map[string]struct{}),
+		codes:     make(map[string]bool),
 	}
 }
 
-// LoadWaypoints reads JSON files from dataDir and FIT files from fitDir, deduplicating and pruning them.
-func (s *Store) LoadWaypoints() error {
-	jsonWaypoints := make([]geo.Waypoint, 0)
+// LoadCodes reads authorization codes from the codes file.
+func (s *Store) LoadCodes() error {
+	if s.codesFile == "" {
+		return nil
+	}
 
-	// 1. Load JSON files from data directory
-	if _, err := os.Stat(s.dataDir); err == nil {
+	data, err := os.ReadFile(s.codesFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	newCodes := make(map[string]bool)
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			newCodes[trimmed] = true
+		}
+	}
+
+	s.codeMutex.Lock()
+	defer s.codeMutex.Unlock()
+	s.codes = newCodes
+	return nil
+}
+
+// IsAuthorized checks if the given code is in the authorized codes list.
+// If no codes are configured, access is restricted by default.
+func (s *Store) IsAuthorized(code string) bool {
+	s.codeMutex.RLock()
+	defer s.codeMutex.RUnlock()
+
+	if len(s.codes) == 0 {
+		return false
+	}
+	return s.codes[code]
+}
+
+// LoadWaypoints reads all JSON tracking files from dataDir and FIT files from fitDir,
+// parses and deduplicates/prunes them, and stores them chronologically.
+func (s *Store) LoadWaypoints() error {
+	// 1. Load JSON tracking files from data directory
+	jsonWaypoints := make([]geo.Waypoint, 0)
+	if s.dataDir != "" {
 		err := filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 
-			if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".json") {
+			if !d.IsDir() && strings.HasPrefix(d.Name(), "tracking_") && strings.HasSuffix(d.Name(), ".json") {
 				data, err := os.ReadFile(path)
 				if err != nil {
 					log.Printf("Error reading JSON file %s: %v", path, err)
@@ -75,7 +117,7 @@ func (s *Store) LoadWaypoints() error {
 		}
 	}
 
-	// 2. Load FIT files from fit directory
+	// 2. Load FIT files from fit directory recursively
 	fitWaypoints := make([]geo.Waypoint, 0)
 	if s.fitDir != "" {
 		if _, err := os.Stat(s.fitDir); err == nil {
@@ -102,88 +144,32 @@ func (s *Store) LoadWaypoints() error {
 		}
 	}
 
-	// 3. Combine and deduplicate: keep JSON waypoints only if strictly newer than the latest FIT waypoint
-	allWaypoints := make([]geo.Waypoint, 0, len(jsonWaypoints)+len(fitWaypoints))
-	if len(fitWaypoints) > 0 {
-		slices.SortFunc(fitWaypoints, func(a, b geo.Waypoint) int {
-			return a.Timestamp.Compare(b.Timestamp)
-		})
+	// Combine all loaded waypoints
+	combined := append(jsonWaypoints, fitWaypoints...)
 
-		latestFitTime := fitWaypoints[len(fitWaypoints)-1].Timestamp
-		for _, wp := range jsonWaypoints {
-			if wp.Timestamp.After(latestFitTime) {
-				allWaypoints = append(allWaypoints, wp)
-			}
-		}
-		allWaypoints = append(allWaypoints, fitWaypoints...)
-	} else {
-		allWaypoints = append(allWaypoints, jsonWaypoints...)
-	}
-
-	// 4. Sort all waypoints chronologically
-	slices.SortFunc(allWaypoints, func(a, b geo.Waypoint) int {
+	// Sort chronologically by timestamp
+	slices.SortFunc(combined, func(a, b geo.Waypoint) int {
 		return a.Timestamp.Compare(b.Timestamp)
 	})
 
-	// 5. Prune points closer than 5 meters to prevent dense clutter
-	prunedWaypoints := geo.PruneWaypoints(allWaypoints, geo.DefaultMinPruneDistanceKm)
+	// Prune dense clusters closer than 5 meters
+	pruned := geo.PruneWaypoints(combined, geo.DefaultMinPruneDistanceKm)
 
 	s.wpMutex.Lock()
 	defer s.wpMutex.Unlock()
 
-	s.waypoints = prunedWaypoints
-	if len(prunedWaypoints) > 0 {
-		latest := prunedWaypoints[len(prunedWaypoints)-1].Timestamp
-		s.latestWaypoint = &latest
+	s.waypoints = pruned
+	if len(pruned) > 0 {
+		s.latestWaypoint = &pruned[len(pruned)-1].Timestamp
 	}
 
 	log.Printf("Loaded %d JSON waypoints, %d FIT waypoints -> %d total waypoints (%d after pruning)",
-		len(jsonWaypoints), len(fitWaypoints), len(allWaypoints), len(prunedWaypoints))
+		len(jsonWaypoints), len(fitWaypoints), len(combined), len(pruned))
 	return nil
 }
 
-// LoadCodes reads authorized codes from the codes file.
-func (s *Store) LoadCodes() error {
-	data, err := os.ReadFile(s.codesFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		log.Printf("Error reading codes file %s: %v", s.codesFile, err)
-		return err
-	}
-
-	codesText := strings.TrimSpace(string(data))
-	newCodes := make(map[string]struct{})
-	if codesText != "" {
-		for _, line := range strings.Split(codesText, "\n") {
-			code := strings.TrimSpace(line)
-			if code != "" {
-				newCodes[code] = struct{}{}
-			}
-		}
-	}
-
-	s.codesMutex.Lock()
-	defer s.codesMutex.Unlock()
-	s.codes = newCodes
-	return nil
-}
-
-// IsAuthorized checks if the given code is present in the authorized codes list.
-func (s *Store) IsAuthorized(code string) bool {
-	if code == "" {
-		return false
-	}
-	s.codesMutex.RLock()
-	defer s.codesMutex.RUnlock()
-
-	_, exists := s.codes[code]
-	return exists
-}
-
-// AddWaypoint appends a new waypoint if it is newer than the latest recorded waypoint.
-// It also persists the waypoint as a JSON file in the data directory.
+// AddWaypoint appends a newly polled waypoint to the store and writes it to disk if appropriate.
+// Returns false if the waypoint was ignored (e.g. invalid or redundant).
 func (s *Store) AddWaypoint(wp geo.Waypoint, rawData []byte) bool {
 	if wp.Location == nil {
 		return false
@@ -192,11 +178,12 @@ func (s *Store) AddWaypoint(wp geo.Waypoint, rawData []byte) bool {
 	s.wpMutex.Lock()
 	defer s.wpMutex.Unlock()
 
-	if s.latestWaypoint != nil && !wp.Timestamp.After(*s.latestWaypoint) {
+	// Check if already present or older than latest
+	if s.latestWaypoint != nil && (wp.Timestamp.Before(*s.latestWaypoint) || wp.Timestamp.Equal(*s.latestWaypoint)) {
 		return false
 	}
 
-	// Check if this new waypoint should be pruned relative to the last kept waypoint
+	// Check if point is closer than 5 meters to the last point
 	if len(s.waypoints) > 0 {
 		lastKept := s.waypoints[len(s.waypoints)-1]
 		if lastKept.Location != nil {
@@ -235,6 +222,26 @@ func (s *Store) GetWaypoints() []geo.Waypoint {
 
 	res := make([]geo.Waypoint, len(s.waypoints))
 	copy(res, s.waypoints)
+	return res
+}
+
+// InterpolateImageLocations enriches images that lack GPS coordinates by calculating their
+// estimated location along the route using their timestamps.
+func (s *Store) InterpolateImageLocations(imageList []images.ImageInfo) []images.ImageInfo {
+	wps := s.GetWaypoints()
+	if len(wps) == 0 || len(imageList) == 0 {
+		return imageList
+	}
+
+	res := make([]images.ImageInfo, len(imageList))
+	for i, img := range imageList {
+		res[i] = img
+		if res[i].Location == nil && !res[i].Timestamp.IsZero() {
+			if loc := geo.InterpolateLocation(wps, res[i].Timestamp, geo.DefaultMaxInterpolationBuffer); loc != nil {
+				res[i].Location = loc
+			}
+		}
+	}
 	return res
 }
 
