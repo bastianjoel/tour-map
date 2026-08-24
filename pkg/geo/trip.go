@@ -25,13 +25,109 @@ type PathLine struct {
 	Coords [][2]float64 `json:"coords"` // [lat, lng] pairs
 }
 
-// Segment represents a distinct trip segment with start/end time and rendering path lines.
+// Stage represents a single day's stage within a multi-day trip or tour.
+type Stage struct {
+	StageNumber     int        `json:"stageNumber"`
+	Date            string     `json:"date"`
+	StartTime       time.Time  `json:"startTime"`
+	EndTime         time.Time  `json:"endTime"`
+	StartCoord      [2]float64 `json:"startCoord"`
+	EndCoord        [2]float64 `json:"endCoord"`
+	DistanceKm      float64    `json:"distanceKm"`
+	TotalDistanceKm float64    `json:"totalDistanceKm"`
+	CoordsCount     int        `json:"coordsCount"`
+}
+
+// Segment represents a distinct trip segment with start/end time, day stages, and rendering path lines.
 type Segment struct {
-	ID        int          `json:"id"`
-	StartTime time.Time    `json:"startTime"`
-	EndTime   time.Time    `json:"endTime"`
-	Lines     []PathLine   `json:"lines,omitempty"`
-	Coords    [][2]float64 `json:"coords"` // Flattened coordinates for bounding box calculation
+	ID         int          `json:"id"`
+	StartTime  time.Time    `json:"startTime"`
+	EndTime    time.Time    `json:"endTime"`
+	DistanceKm float64      `json:"distanceKm"`
+	StartCoord [2]float64   `json:"startCoord"`
+	EndCoord   [2]float64   `json:"endCoord"`
+	Stages     []Stage      `json:"stages,omitempty"`
+	Lines      []PathLine   `json:"lines,omitempty"`
+	Coords     [][2]float64 `json:"coords"` // Flattened coordinates for bounding box calculation
+}
+
+// computeSegmentStages partitions waypoints within a single trip segment into day stages,
+// calculating distances, start/end coordinates, and cumulative totals.
+func computeSegmentStages(waypoints []Waypoint) ([]Stage, float64, [2]float64, [2]float64) {
+	if len(waypoints) == 0 {
+		return nil, 0, [2]float64{}, [2]float64{}
+	}
+
+	startCoord := [2]float64{waypoints[0].Location.Latitude, waypoints[0].Location.Longitude}
+	endCoord := [2]float64{waypoints[len(waypoints)-1].Location.Latitude, waypoints[len(waypoints)-1].Location.Longitude}
+
+	// Calculate total segment distance along all waypoints
+	segDist := 0.0
+	for k := 1; k < len(waypoints); k++ {
+		segDist += DistanceKm(
+			waypoints[k-1].Location.Latitude, waypoints[k-1].Location.Longitude,
+			waypoints[k].Location.Latitude, waypoints[k].Location.Longitude,
+		)
+	}
+
+	var stages []Stage
+	var currentStageWps []Waypoint
+	var currentStageDate string
+	var cumulativeDistance float64
+
+	flushStage := func() {
+		if len(currentStageWps) == 0 {
+			return
+		}
+		stageDist := 0.0
+		for k := 1; k < len(currentStageWps); k++ {
+			stageDist += DistanceKm(
+				currentStageWps[k-1].Location.Latitude, currentStageWps[k-1].Location.Longitude,
+				currentStageWps[k].Location.Latitude, currentStageWps[k].Location.Longitude,
+			)
+		}
+		cumulativeDistance += stageDist
+		stages = append(stages, Stage{
+			StageNumber:     len(stages) + 1,
+			Date:            currentStageDate,
+			StartTime:       currentStageWps[0].Timestamp,
+			EndTime:         currentStageWps[len(currentStageWps)-1].Timestamp,
+			StartCoord:      [2]float64{currentStageWps[0].Location.Latitude, currentStageWps[0].Location.Longitude},
+			EndCoord:        [2]float64{currentStageWps[len(currentStageWps)-1].Location.Latitude, currentStageWps[len(currentStageWps)-1].Location.Longitude},
+			DistanceKm:      stageDist,
+			TotalDistanceKm: cumulativeDistance,
+			CoordsCount:     len(currentStageWps),
+		})
+		currentStageWps = nil
+	}
+
+	for i, wp := range waypoints {
+		if i == 0 {
+			currentStageWps = append(currentStageWps, wp)
+			currentStageDate = wp.Timestamp.Format("2006-01-02")
+			continue
+		}
+
+		prevWp := waypoints[i-1]
+		timeGap := wp.Timestamp.Sub(prevWp.Timestamp)
+		if timeGap < 0 {
+			timeGap = -timeGap
+		}
+		dateChanged := wp.Timestamp.Format("2006-01-02") != currentStageDate
+		isNewStage := timeGap >= 6*time.Hour || (dateChanged && timeGap >= 2*time.Hour)
+
+		if isNewStage {
+			flushStage()
+			currentStageWps = append(currentStageWps, wp)
+			currentStageDate = wp.Timestamp.Format("2006-01-02")
+		} else {
+			currentStageWps = append(currentStageWps, wp)
+		}
+	}
+
+	flushStage()
+
+	return stages, segDist, startCoord, endCoord
 }
 
 // SegmentWaypoints partitions a chronologically sorted slice of waypoints into distinct trip segments.
@@ -60,6 +156,7 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 	var currentCoords [][2]float64
 	var currentLines []PathLine
 	var currentSolidLine [][2]float64
+	var currentWaypoints []Waypoint
 	var currentStart, currentEnd time.Time
 	segmentID := 0
 
@@ -76,18 +173,26 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 					Coords: [][2]float64{currentSolidLine[0], currentSolidLine[0]},
 				})
 			}
+
+			stages, segDist, startCoord, endCoord := computeSegmentStages(currentWaypoints)
+
 			segments = append(segments, Segment{
-				ID:        segmentID,
-				StartTime: currentStart,
-				EndTime:   currentEnd,
-				Lines:     currentLines,
-				Coords:    currentCoords,
+				ID:         segmentID,
+				StartTime:  currentStart,
+				EndTime:    currentEnd,
+				DistanceKm: segDist,
+				StartCoord: startCoord,
+				EndCoord:   endCoord,
+				Stages:     stages,
+				Lines:      currentLines,
+				Coords:     currentCoords,
 			})
 			segmentID++
 		}
 		currentCoords = nil
 		currentLines = nil
 		currentSolidLine = nil
+		currentWaypoints = nil
 	}
 
 	for i, wp := range validWaypoints {
@@ -96,6 +201,7 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 		if i == 0 {
 			currentCoords = append(currentCoords, coord)
 			currentSolidLine = append(currentSolidLine, coord)
+			currentWaypoints = append(currentWaypoints, wp)
 			currentStart = wp.Timestamp
 			currentEnd = wp.Timestamp
 			continue
@@ -137,6 +243,7 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 				currentSolidLine = append(currentSolidLine, coord)
 			}
 			currentCoords = append(currentCoords, coord)
+			currentWaypoints = append(currentWaypoints, wp)
 			currentEnd = wp.Timestamp
 		} else {
 			// Different activities or live tracking
@@ -145,11 +252,13 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 				flushCurrentSegment()
 				currentCoords = [][2]float64{coord}
 				currentSolidLine = [][2]float64{coord}
+				currentWaypoints = []Waypoint{wp}
 				currentStart = wp.Timestamp
 				currentEnd = wp.Timestamp
 			} else {
 				currentSolidLine = append(currentSolidLine, coord)
 				currentCoords = append(currentCoords, coord)
+				currentWaypoints = append(currentWaypoints, wp)
 				currentEnd = wp.Timestamp
 			}
 		}

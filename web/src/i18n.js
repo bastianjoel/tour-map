@@ -20,6 +20,24 @@ export const translations = {
     imageAlt: 'Tour Image',
     mapLiberty: '🗺️ Map',
     mapSatellite: '🛰️ Satellite',
+    start: 'Start',
+    goal: 'Goal',
+    startGoal: 'Start / Goal',
+    tourStart: 'Tour Start',
+    tourGoal: 'Tour Goal',
+    stage: 'Stage',
+    dayStage: (num, total) => (total > 1 ? `Stage ${num} of ${total}` : `Stage ${num}`),
+    stageBadge: (num) => `Stage ${num}`,
+    day: (num) => `Day ${num}`,
+    distance: 'Distance',
+    stageDistance: 'Stage Distance',
+    totalDistance: 'Total Distance',
+    totalSoFar: 'Total so far',
+    duration: 'Duration',
+    startTime: 'Start Time',
+    endTime: 'End Time',
+    viewPhotos: '📷 View Photos',
+    noPhotosForStage: 'No photos recorded for this stage',
   },
   de: {
     title: 'Tour-Karte',
@@ -34,6 +52,24 @@ export const translations = {
     imageAlt: 'Tour-Foto',
     mapLiberty: '🗺️ Karte',
     mapSatellite: '🛰️ Satellit',
+    start: 'Start',
+    goal: 'Ziel',
+    startGoal: 'Start / Ziel',
+    tourStart: 'Tour-Start',
+    tourGoal: 'Tour-Ziel',
+    stage: 'Etappe',
+    dayStage: (num, total) => (total > 1 ? `Etappe ${num} von ${total}` : `Etappe ${num}`),
+    stageBadge: (num) => `Etappe ${num}`,
+    day: (num) => `Tag ${num}`,
+    distance: 'Distanz',
+    stageDistance: 'Etappendistanz',
+    totalDistance: 'Gesamtdistanz',
+    totalSoFar: 'Bisher gesamt',
+    duration: 'Dauer',
+    startTime: 'Startzeit',
+    endTime: 'Endzeit',
+    viewPhotos: '📷 Fotos ansehen',
+    noPhotosForStage: 'Keine Fotos für diese Etappe vorhanden',
   },
 };
 
@@ -60,6 +96,46 @@ export function formatDate(dateStr) {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+export function formatShortDate(dateStr) {
+  if (!dateStr) return t('dateUnknown');
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+
+  const locale = currentLang === 'de' ? 'de-DE' : 'en-US';
+  return d.toLocaleDateString(locale, {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+export function formatTime(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '';
+
+  const locale = currentLang === 'de' ? 'de-DE' : 'en-US';
+  return d.toLocaleTimeString(locale, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function formatDuration(startStr, endStr) {
+  if (!startStr || !endStr) return '';
+  const s = new Date(startStr).getTime();
+  const e = new Date(endStr).getTime();
+  if (isNaN(s) || isNaN(e) || e <= s) return '';
+
+  const totalMin = Math.round((e - s) / (60 * 1000));
+  const hours = Math.floor(totalMin / 60);
+  const minutes = totalMin % 60;
+
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
 }
 
 export function applyStaticTranslations() {

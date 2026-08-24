@@ -199,3 +199,69 @@ func TestFilterPrivacy(t *testing.T) {
 		t.Errorf("expected empty result for nil input")
 	}
 }
+
+func TestSegmentWaypoints_DayStagesAndDistances(t *testing.T) {
+	day1 := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC)
+	day3 := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC)
+
+	// Multi-day tour with 3 days, consecutive days within 10km and <7 days
+	wps := []Waypoint{
+		// Day 1
+		{Location: &GPSCoords{Latitude: 52.5200, Longitude: 13.4050}, Timestamp: day1},
+		{Location: &GPSCoords{Latitude: 52.5250, Longitude: 13.4100}, Timestamp: day1.Add(2 * time.Hour)},
+		// Day 2 (starts near where Day 1 ended)
+		{Location: &GPSCoords{Latitude: 52.5255, Longitude: 13.4105}, Timestamp: day2},
+		{Location: &GPSCoords{Latitude: 52.5300, Longitude: 13.4150}, Timestamp: day2.Add(3 * time.Hour)},
+		// Day 3
+		{Location: &GPSCoords{Latitude: 52.5305, Longitude: 13.4155}, Timestamp: day3},
+		{Location: &GPSCoords{Latitude: 52.5400, Longitude: 13.4250}, Timestamp: day3.Add(4 * time.Hour)},
+	}
+
+	segments := SegmentWaypoints(wps, 10.0, 7*24*time.Hour)
+
+	if len(segments) != 1 {
+		t.Fatalf("expected 1 segment for connected multi-day tour, got %d", len(segments))
+	}
+
+	seg := segments[0]
+	if len(seg.Stages) != 3 {
+		t.Fatalf("expected 3 stages for 3 days, got %d", len(seg.Stages))
+	}
+
+	// Verify Start and End coords for segment
+	if seg.StartCoord[0] != 52.5200 || seg.StartCoord[1] != 13.4050 {
+		t.Errorf("unexpected segment startCoord: %v", seg.StartCoord)
+	}
+	if seg.EndCoord[0] != 52.5400 || seg.EndCoord[1] != 13.4250 {
+		t.Errorf("unexpected segment endCoord: %v", seg.EndCoord)
+	}
+	if seg.DistanceKm <= 0 {
+		t.Errorf("expected positive segment distance, got %f", seg.DistanceKm)
+	}
+
+	// Stage 1
+	if seg.Stages[0].StageNumber != 1 || seg.Stages[0].Date != "2026-08-01" {
+		t.Errorf("unexpected stage 1: %+v", seg.Stages[0])
+	}
+	if seg.Stages[0].StartCoord[0] != 52.5200 || seg.Stages[0].StartCoord[1] != 13.4050 {
+		t.Errorf("unexpected stage 1 startCoord: %v", seg.Stages[0].StartCoord)
+	}
+
+	// Stage 2
+	if seg.Stages[1].StageNumber != 2 || seg.Stages[1].Date != "2026-08-02" {
+		t.Errorf("unexpected stage 2: %+v", seg.Stages[1])
+	}
+	if seg.Stages[1].TotalDistanceKm <= seg.Stages[0].TotalDistanceKm {
+		t.Errorf("expected cumulative distance to increase: stage 1 = %f, stage 2 = %f",
+			seg.Stages[0].TotalDistanceKm, seg.Stages[1].TotalDistanceKm)
+	}
+
+	// Stage 3
+	if seg.Stages[2].StageNumber != 3 || seg.Stages[2].Date != "2026-08-03" {
+		t.Errorf("unexpected stage 3: %+v", seg.Stages[2])
+	}
+	if seg.Stages[2].EndCoord[0] != 52.5400 || seg.Stages[2].EndCoord[1] != 13.4250 {
+		t.Errorf("unexpected stage 3 endCoord: %v", seg.Stages[2].EndCoord)
+	}
+}

@@ -2,11 +2,19 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { openGallery, setGalleryMap, initGalleryEvents } from './gallery.js';
-import { formatDate, applyStaticTranslations } from './i18n.js';
+import {
+  formatDate,
+  formatShortDate,
+  formatTime,
+  formatDuration,
+  t,
+  applyStaticTranslations,
+} from './i18n.js';
 
 let segments = JSON.parse(document.getElementById('tour-data')?.textContent || '[]');
 let allImages = JSON.parse(document.getElementById('image-data')?.textContent || '[]');
 const imageMarkers = {};
+let stageMarkers = [];
 let lastUpdateTime = new Date().toISOString();
 
 if (!Array.isArray(allImages)) allImages = [];
@@ -30,10 +38,10 @@ const TIME_BUFFER_MS = 60 * 60 * 1000;
 
 function isImageInSegment(img, seg) {
   if (!img.timestamp || !seg || !seg.startTime || !seg.endTime) return false;
-  const t = new Date(img.timestamp).getTime();
+  const tTime = new Date(img.timestamp).getTime();
   const start = new Date(seg.startTime).getTime() - TIME_BUFFER_MS;
   const end = new Date(seg.endTime).getTime() + TIME_BUFFER_MS;
-  return t >= start && t <= end;
+  return tTime >= start && tTime <= end;
 }
 
 function getImagesForSegment(seg) {
@@ -41,8 +49,498 @@ function getImagesForSegment(seg) {
   return allImages.filter((img) => isImageInSegment(img, seg));
 }
 
+function getImagesForStage(stage) {
+  if (!stage || !stage.startTime || !stage.endTime) return [];
+  const s = new Date(stage.startTime).getTime() - TIME_BUFFER_MS;
+  const e = new Date(stage.endTime).getTime() + TIME_BUFFER_MS;
+  return allImages.filter((img) => {
+    if (!img.timestamp) return false;
+    const time = new Date(img.timestamp).getTime();
+    return time >= s && time <= e;
+  });
+}
+
 function findSegmentForImage(img) {
   return segments.find((seg) => isImageInSegment(img, seg));
+}
+
+function isNear(c1, c2, thresholdDeg = 0.001) {
+  if (!c1 || !c2) return false;
+  return (
+    Math.abs(c1[0] - c2[0]) < thresholdDeg &&
+    Math.abs(c1[1] - c2[1]) < thresholdDeg
+  );
+}
+
+const PIN_POPUP_OFFSET = {
+  top: [0, 8],
+  'top-left': [0, 8],
+  'top-right': [0, 8],
+  bottom: [0, -38],
+  'bottom-left': [0, -38],
+  'bottom-right': [0, -38],
+  left: [16, -18],
+  right: [-16, -18],
+};
+
+function createPopupElement(contentHtml, buttonId, onClick) {
+  const popup = new maplibregl.Popup({
+    offset: PIN_POPUP_OFFSET,
+    maxWidth: '280px',
+    closeButton: true,
+    closeOnClick: true,
+  }).setHTML(contentHtml);
+
+  popup.on('open', () => {
+    const popupEl = popup.getElement();
+    if (popupEl) {
+      ['click', 'mousedown', 'pointerdown', 'touchstart'].forEach((evtName) => {
+        popupEl.addEventListener(evtName, (e) => {
+          e.stopPropagation();
+        });
+      });
+    }
+
+    if (buttonId && onClick) {
+      const btn = document.getElementById(buttonId);
+      if (btn) {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          onClick();
+        };
+      }
+    }
+  });
+
+  return popup;
+}
+
+function clearStageMarkers() {
+  for (const m of stageMarkers) {
+    m.remove();
+  }
+  stageMarkers = [];
+}
+
+function createPinSvg(type, content = '') {
+  let pinColor = '#3b82f6';
+  let inner = '';
+
+  if (type === 'start') {
+    pinColor = '#10b981';
+    inner = `<polygon points="13,10.5 21,15 13,19.5" fill="#059669"/>`;
+  } else if (type === 'goal') {
+    pinColor = '#ef4444';
+    inner = `<text x="16" y="19" font-size="11" text-anchor="middle">🏁</text>`;
+  } else if (type === 'startgoal') {
+    pinColor = '#0d9488';
+    inner = `<text x="16" y="19" font-size="11" text-anchor="middle">🏁</text>`;
+  } else if (type === 'stage') {
+    pinColor = '#3b82f6';
+    inner = `<text x="16" y="19" font-size="11" font-weight="800" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="middle" fill="#1d4ed8">${content}</text>`;
+  }
+
+  return `
+    <svg viewBox="0 0 32 42" width="28" height="37" xmlns="http://www.w3.org/2000/svg" class="tour-pin-svg">
+      <path d="M16 1 C7.7 1 1 7.7 1 16 C1 26.5 14.8 40.2 15.4 40.8 C15.7 41.1 16.3 41.1 16.6 40.8 C17.2 40.2 31 26.5 31 16 C31 7.7 24.3 1 16 1 Z"
+            fill="${pinColor}" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
+      <circle cx="16" cy="15" r="9" fill="#ffffff"/>
+      ${inner}
+    </svg>
+  `;
+}
+
+function createPinElement(type, content = '', tooltip = '') {
+  const el = document.createElement('div');
+  el.className = `tour-pin tour-pin-${type}`;
+  el.innerHTML = createPinSvg(type, content);
+  if (tooltip) {
+    el.title = tooltip;
+  }
+  return el;
+}
+
+function addPinMarker(el, coord, popup) {
+  popup.setLngLat([coord[1], coord[0]]);
+  const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+    .setLngLat([coord[1], coord[0]])
+    .setPopup(popup)
+    .addTo(map);
+
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (popup.isOpen()) {
+      popup.remove();
+    } else {
+      popup.addTo(map);
+    }
+  });
+
+  stageMarkers.push(marker);
+  return marker;
+}
+
+function drawStageMarkers(segs) {
+  clearStageMarkers();
+  if (!Array.isArray(segs)) return;
+
+  segs.forEach((segment, segIdx) => {
+    const segId = segment.id !== undefined ? segment.id : segIdx;
+    let stages = segment.stages;
+    let startCoord = segment.startCoord;
+    let endCoord = segment.endCoord;
+
+    // Fallback if stages or coords are not provided
+    if (!startCoord && segment.coords && segment.coords.length > 0) {
+      startCoord = segment.coords[0];
+    }
+    if (!endCoord && segment.coords && segment.coords.length > 0) {
+      endCoord = segment.coords[segment.coords.length - 1];
+    }
+
+    if (!stages || stages.length === 0) {
+      if (startCoord && endCoord) {
+        stages = [
+          {
+            stageNumber: 1,
+            date: segment.startTime ? segment.startTime.split('T')[0] : '',
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            startCoord: startCoord,
+            endCoord: endCoord,
+            distanceKm: segment.distanceKm || 0,
+            totalDistanceKm: segment.distanceKm || 0,
+          },
+        ];
+      } else {
+        return;
+      }
+    }
+
+    const numStages = stages.length;
+    const tourImgs = getImagesForSegment(segment);
+
+    // Case 1: Single stage / day
+    if (numStages === 1) {
+      const stg = stages[0];
+      const isLoop = isNear(stg.startCoord, stg.endCoord);
+
+      if (isLoop) {
+        // Combined Start/Goal pin
+        const tooltip = `${t('startGoal')}: ${formatShortDate(segment.startTime)}`;
+        const el = createPinElement('startgoal', '', tooltip);
+
+        const btnId = `btn-stage-photos-${segId}-startgoal`;
+        const distText = stg.distanceKm > 0 ? `${stg.distanceKm.toFixed(1)} km` : '';
+        const durationText = formatDuration(segment.startTime, segment.endTime);
+
+        const html = `
+          <div class="tour-popup-container">
+            <div class="tour-popup-badge tour-popup-badge-start">🟢🏁 ${t('startGoal')}</div>
+            <div class="tour-popup-title">${t('startGoal')}</div>
+            <div class="tour-popup-date">📅 ${formatShortDate(segment.startTime)}</div>
+            <div class="tour-popup-stats">
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('startTime')}:</span>
+                <span class="tour-popup-stat-val">${formatTime(segment.startTime)}</span>
+              </div>
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('endTime')}:</span>
+                <span class="tour-popup-stat-val">${formatTime(segment.endTime)}</span>
+              </div>
+              ${
+                durationText
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('duration')}:</span>
+                <span class="tour-popup-stat-val">${durationText}</span>
+              </div>`
+                  : ''
+              }
+              ${
+                distText
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('distance')}:</span>
+                <span class="tour-popup-stat-val">${distText}</span>
+              </div>`
+                  : ''
+              }
+            </div>
+            ${
+              tourImgs.length > 0
+                ? `
+              <button class="tour-popup-btn" id="${btnId}">${t('viewPhotos')} (${tourImgs.length})</button>
+            `
+                : ''
+            }
+          </div>
+        `;
+
+        const popup = createPopupElement(html, btnId, () =>
+          openGallery(tourImgs, 0)
+        );
+        addPinMarker(el, stg.startCoord, popup);
+      } else {
+        // Separate Start and Goal pins
+        // 1. Start pin
+        const startTooltip = `${t('start')}: ${formatShortDate(segment.startTime)}`;
+        const startEl = createPinElement('start', '', startTooltip);
+
+        const startBtnId = `btn-stage-photos-${segId}-start`;
+        const startHtml = `
+          <div class="tour-popup-container">
+            <div class="tour-popup-badge tour-popup-badge-start">🟢 ${t('start')}</div>
+            <div class="tour-popup-title">${t('tourStart')}</div>
+            <div class="tour-popup-date">📅 ${formatShortDate(segment.startTime)}</div>
+            <div class="tour-popup-stats">
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('startTime')}:</span>
+                <span class="tour-popup-stat-val">${formatTime(segment.startTime)}</span>
+              </div>
+              ${
+                stg.distanceKm > 0
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('distance')}:</span>
+                <span class="tour-popup-stat-val">${stg.distanceKm.toFixed(1)} km</span>
+              </div>`
+                  : ''
+              }
+            </div>
+            ${
+              tourImgs.length > 0
+                ? `
+              <button class="tour-popup-btn" id="${startBtnId}">${t('viewPhotos')} (${tourImgs.length})</button>
+            `
+                : ''
+            }
+          </div>
+        `;
+        const startPopup = createPopupElement(startHtml, startBtnId, () =>
+          openGallery(tourImgs, 0)
+        );
+        addPinMarker(startEl, stg.startCoord, startPopup);
+
+        // 2. Goal pin
+        const goalTooltip = `${t('goal')}: ${formatShortDate(segment.endTime)}`;
+        const goalEl = createPinElement('goal', '', goalTooltip);
+
+        const goalBtnId = `btn-stage-photos-${segId}-goal`;
+        const durationText = formatDuration(segment.startTime, segment.endTime);
+        const goalHtml = `
+          <div class="tour-popup-container">
+            <div class="tour-popup-badge tour-popup-badge-goal">🏁 ${t('goal')}</div>
+            <div class="tour-popup-title">${t('tourGoal')}</div>
+            <div class="tour-popup-date">📅 ${formatShortDate(segment.endTime)}</div>
+            <div class="tour-popup-stats">
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('endTime')}:</span>
+                <span class="tour-popup-stat-val">${formatTime(segment.endTime)}</span>
+              </div>
+              ${
+                durationText
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('duration')}:</span>
+                <span class="tour-popup-stat-val">${durationText}</span>
+              </div>`
+                  : ''
+              }
+              ${
+                stg.distanceKm > 0
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('distance')}:</span>
+                <span class="tour-popup-stat-val">${stg.distanceKm.toFixed(1)} km</span>
+              </div>`
+                  : ''
+              }
+            </div>
+            ${
+              tourImgs.length > 0
+                ? `
+              <button class="tour-popup-btn" id="${goalBtnId}">${t('viewPhotos')} (${tourImgs.length})</button>
+            `
+                : ''
+            }
+          </div>
+        `;
+        const goalPopup = createPopupElement(goalHtml, goalBtnId, () =>
+          openGallery(tourImgs, tourImgs.length - 1)
+        );
+        addPinMarker(goalEl, stg.endCoord, goalPopup);
+      }
+    } else {
+      // Case 2: Multi-day tour (numStages > 1)
+      stages.forEach((stg, stgIdx) => {
+        const stageImgs = getImagesForStage(stg);
+        const stageDuration = formatDuration(stg.startTime, stg.endTime);
+
+        if (stgIdx === 0) {
+          // Tour Start Pin (Stage 1)
+          const tooltip = `${t('tourStart')} • ${t('stageBadge', 1)}: ${formatShortDate(stg.startTime)}`;
+          const startEl = createPinElement('start', '', tooltip);
+
+          const btnId = `btn-stage-photos-${segId}-stage-1`;
+          const html = `
+            <div class="tour-popup-container">
+              <div class="tour-popup-badge tour-popup-badge-start">🟢 ${t('tourStart')} • ${t('stageBadge', 1)}</div>
+              <div class="tour-popup-title">${t('dayStage', 1, numStages)}</div>
+              <div class="tour-popup-date">📅 ${formatShortDate(stg.startTime)}</div>
+              <div class="tour-popup-stats">
+                <div class="tour-popup-stat-row">
+                  <span class="tour-popup-stat-label">${t('startTime')}:</span>
+                  <span class="tour-popup-stat-val">${formatTime(stg.startTime)}</span>
+                </div>
+                ${
+                  stageDuration
+                    ? `
+                <div class="tour-popup-stat-row">
+                  <span class="tour-popup-stat-label">${t('duration')}:</span>
+                  <span class="tour-popup-stat-val">${stageDuration}</span>
+                </div>`
+                    : ''
+                }
+                <div class="tour-popup-stat-row">
+                  <span class="tour-popup-stat-label">${t('stageDistance')}:</span>
+                  <span class="tour-popup-stat-val">${stg.distanceKm.toFixed(1)} km</span>
+                </div>
+                <div class="tour-popup-stat-row">
+                  <span class="tour-popup-stat-label">${t('totalDistance')}:</span>
+                  <span class="tour-popup-stat-val">${(segment.distanceKm || stg.totalDistanceKm).toFixed(1)} km</span>
+                </div>
+              </div>
+            </div>
+            ${
+              stageImgs.length > 0
+                ? `
+              <button class="tour-popup-btn" id="${btnId}">${t('viewPhotos')} (${stageImgs.length})</button>
+            `
+                : tourImgs.length > 0
+                  ? `
+              <button class="tour-popup-btn" id="${btnId}">${t('viewPhotos')}</button>
+            `
+                  : ''
+            }
+          </div>
+        `;
+        const popup = createPopupElement(html, btnId, () => {
+          if (stageImgs.length > 0) openGallery(stageImgs, 0);
+          else openGallery(tourImgs, 0);
+        });
+        addPinMarker(startEl, stg.startCoord, popup);
+      } else {
+        // Intermediate Day Stage Pins (Stage 2, Stage 3, ...)
+        const tooltip = `${t('dayStage', stg.stageNumber, numStages)}: ${formatShortDate(stg.startTime)}`;
+        const stageEl = createPinElement('stage', stg.stageNumber, tooltip);
+
+        const btnId = `btn-stage-photos-${segId}-stage-${stg.stageNumber}`;
+        const html = `
+          <div class="tour-popup-container">
+            <div class="tour-popup-badge tour-popup-badge-stage">🚩 ${t('dayStage', stg.stageNumber, numStages)}</div>
+            <div class="tour-popup-title">${t('dayStage', stg.stageNumber, numStages)}</div>
+            <div class="tour-popup-date">📅 ${formatShortDate(stg.startTime)}</div>
+            <div class="tour-popup-stats">
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('startTime')}:</span>
+                <span class="tour-popup-stat-val">${formatTime(stg.startTime)}</span>
+              </div>
+              ${
+                stageDuration
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('duration')}:</span>
+                <span class="tour-popup-stat-val">${stageDuration}</span>
+              </div>`
+                  : ''
+              }
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('stageDistance')}:</span>
+                <span class="tour-popup-stat-val">${stg.distanceKm.toFixed(1)} km</span>
+              </div>
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('totalSoFar')}:</span>
+                <span class="tour-popup-stat-val">${stg.totalDistanceKm.toFixed(1)} km</span>
+              </div>
+            </div>
+            ${
+              stageImgs.length > 0
+                ? `
+              <button class="tour-popup-btn" id="${btnId}">${t('viewPhotos')} (${stageImgs.length})</button>
+            `
+                : tourImgs.length > 0
+                  ? `
+              <button class="tour-popup-btn" id="${btnId}">${t('viewPhotos')}</button>
+            `
+                  : ''
+            }
+          </div>
+        `;
+        const popup = createPopupElement(html, btnId, () => {
+          if (stageImgs.length > 0) openGallery(stageImgs, 0);
+          else openGallery(tourImgs, 0);
+        });
+        addPinMarker(stageEl, stg.startCoord, popup);
+      }
+
+      // For the final stage, also add the Goal Pin
+      if (stgIdx === numStages - 1) {
+        const goalTooltip = `${t('tourGoal')}: ${formatShortDate(stg.endTime)}`;
+        const goalEl = createPinElement('goal', '', goalTooltip);
+
+        const goalBtnId = `btn-stage-photos-${segId}-goal`;
+        const totalDuration = formatDuration(segment.startTime, segment.endTime);
+        const goalHtml = `
+          <div class="tour-popup-container">
+            <div class="tour-popup-badge tour-popup-badge-goal">🏁 ${t('tourGoal')}</div>
+            <div class="tour-popup-title">${t('tourGoal')} • ${t('stageBadge', numStages)}</div>
+            <div class="tour-popup-date">📅 ${formatShortDate(stg.endTime)}</div>
+            <div class="tour-popup-stats">
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('endTime')}:</span>
+                <span class="tour-popup-stat-val">${formatTime(stg.endTime)}</span>
+              </div>
+              ${
+                totalDuration
+                  ? `
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('duration')}:</span>
+                <span class="tour-popup-stat-val">${totalDuration}</span>
+              </div>`
+                  : ''
+              }
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('stageDistance')}:</span>
+                <span class="tour-popup-stat-val">${stg.distanceKm.toFixed(1)} km</span>
+              </div>
+              <div class="tour-popup-stat-row">
+                <span class="tour-popup-stat-label">${t('totalDistance')}:</span>
+                <span class="tour-popup-stat-val">${(segment.distanceKm || stg.totalDistanceKm).toFixed(1)} km</span>
+              </div>
+            </div>
+            ${
+              stageImgs.length > 0
+                ? `
+              <button class="tour-popup-btn" id="${goalBtnId}">${t('viewPhotos')} (${stageImgs.length})</button>
+            `
+                : tourImgs.length > 0
+                  ? `
+              <button class="tour-popup-btn" id="${goalBtnId}">${t('viewPhotos')}</button>
+            `
+                  : ''
+            }
+          </div>
+        `;
+        const goalPopup = createPopupElement(goalHtml, goalBtnId, () => {
+          if (stageImgs.length > 0) openGallery(stageImgs, stageImgs.length - 1);
+          else openGallery(tourImgs, tourImgs.length - 1);
+        });
+        addPinMarker(goalEl, stg.endCoord, goalPopup);
+      }
+    });
+  }
+});
 }
 
 function segmentsToGeoJSON(segs) {
@@ -240,6 +738,7 @@ map.on('load', () => {
 
   fitMapBounds(segments);
   drawImageMarkers(allImages);
+  drawStageMarkers(segments);
 });
 
 // Setup map style switcher buttons (Map vs Satellite)
@@ -296,6 +795,7 @@ function updateMap() {
               if (source) {
                 source.setData(segmentsToGeoJSON(segments));
               }
+              drawStageMarkers(segments);
             }
           })
           .catch((err) => console.error('Error refreshing path:', err));
@@ -316,3 +816,4 @@ function updateMap() {
 }
 
 setInterval(updateMap, 30000);
+
