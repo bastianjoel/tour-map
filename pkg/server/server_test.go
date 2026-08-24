@@ -1,7 +1,9 @@
 package server
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -284,5 +286,59 @@ func TestServer_MultiSegmentOutput(t *testing.T) {
 	}
 	if len(segments[0].Coords) != 2 || len(segments[1].Coords) != 2 {
 		t.Errorf("unexpected points per segment: %v", segments)
+	}
+}
+
+func TestGzipMiddleware(t *testing.T) {
+	dataDir := t.TempDir()
+	imagesDir := t.TempDir()
+	compDir := t.TempDir()
+
+	store := tracker.NewStore(dataDir, "", "")
+	scanner := images.NewScanner(imagesDir, compDir)
+	srv, err := NewServer(store, scanner, compDir, imagesDir, "<html><body>{{.Waypoints}}</body></html>")
+	if err != nil {
+		t.Fatalf("NewServer() failed: %v", err)
+	}
+
+	handler := srv.Handler()
+
+	// 1. Request with Accept-Encoding: gzip
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rr.Code)
+	}
+	if rr.Header().Get("Content-Encoding") != "gzip" {
+		t.Errorf("expected Content-Encoding: gzip, got %q", rr.Header().Get("Content-Encoding"))
+	}
+
+	gzReader, err := gzip.NewReader(rr.Body)
+	if err != nil {
+		t.Fatalf("failed to create gzip reader: %v", err)
+	}
+	defer gzReader.Close()
+
+	decompressed, err := io.ReadAll(gzReader)
+	if err != nil {
+		t.Fatalf("failed to read decompressed body: %v", err)
+	}
+	if !strings.Contains(string(decompressed), "<html><body>") {
+		t.Errorf("unexpected decompressed content: %s", string(decompressed))
+	}
+
+	// 2. Request without Accept-Encoding: gzip
+	reqPlain := httptest.NewRequest("GET", "/", nil)
+	rrPlain := httptest.NewRecorder()
+	handler.ServeHTTP(rrPlain, reqPlain)
+
+	if rrPlain.Header().Get("Content-Encoding") != "" {
+		t.Errorf("expected no Content-Encoding for plain request, got %q", rrPlain.Header().Get("Content-Encoding"))
+	}
+	if !strings.Contains(rrPlain.Body.String(), "<html><body>") {
+		t.Errorf("unexpected plain content: %s", rrPlain.Body.String())
 	}
 }

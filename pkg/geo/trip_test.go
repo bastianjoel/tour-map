@@ -20,8 +20,12 @@ func TestSegmentWaypoints_WithinLimits(t *testing.T) {
 	if len(segments) != 1 {
 		t.Fatalf("expected 1 segment, got %d", len(segments))
 	}
-	if len(segments[0].Coords) != 3 {
-		t.Errorf("expected 3 coordinates, got %d", len(segments[0].Coords))
+	// Straight line is simplified by RDP to 2 endpoints
+	if len(segments[0].Coords) != 2 {
+		t.Errorf("expected 2 simplified coordinates for collinear path, got %d", len(segments[0].Coords))
+	}
+	if segments[0].Coords[0] != [2]float64{52.52, 13.405} || segments[0].Coords[1] != [2]float64{52.522, 13.407} {
+		t.Errorf("unexpected coordinates: %v", segments[0].Coords)
 	}
 }
 

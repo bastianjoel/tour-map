@@ -46,9 +46,50 @@ type Segment struct {
 	DistanceKm float64      `json:"distanceKm"`
 	StartCoord [2]float64   `json:"startCoord"`
 	EndCoord   [2]float64   `json:"endCoord"`
+	Bounds     [4]float64   `json:"bounds"` // [minLat, minLng, maxLat, maxLng]
 	Stages     []Stage      `json:"stages,omitempty"`
 	Lines      []PathLine   `json:"lines,omitempty"`
-	Coords     [][2]float64 `json:"coords"` // Flattened coordinates for bounding box calculation
+	Coords     [][2]float64 `json:"coords,omitempty"` // Simplified coordinates
+}
+
+// computeBounds computes the [minLat, minLng, maxLat, maxLng] bounding box for a segment.
+func computeBounds(lines []PathLine, coords [][2]float64) [4]float64 {
+	if len(coords) == 0 && len(lines) == 0 {
+		return [4]float64{}
+	}
+	minLat, minLng := 90.0, 180.0
+	maxLat, maxLng := -90.0, -180.0
+
+	update := func(pt [2]float64) {
+		if pt[0] < minLat {
+			minLat = pt[0]
+		}
+		if pt[0] > maxLat {
+			maxLat = pt[0]
+		}
+		if pt[1] < minLng {
+			minLng = pt[1]
+		}
+		if pt[1] > maxLng {
+			maxLng = pt[1]
+		}
+	}
+
+	for _, pt := range coords {
+		update(pt)
+	}
+	for _, l := range lines {
+		for _, pt := range l.Coords {
+			update(pt)
+		}
+	}
+
+	return [4]float64{
+		RoundCoord(minLat, DefaultCoordPrecision),
+		RoundCoord(minLng, DefaultCoordPrecision),
+		RoundCoord(maxLat, DefaultCoordPrecision),
+		RoundCoord(maxLng, DefaultCoordPrecision),
+	}
 }
 
 // computeSegmentStages partitions waypoints within a single trip segment into day stages,
@@ -92,10 +133,10 @@ func computeSegmentStages(waypoints []Waypoint) ([]Stage, float64, [2]float64, [
 			Date:            currentStageDate,
 			StartTime:       currentStageWps[0].Timestamp,
 			EndTime:         currentStageWps[len(currentStageWps)-1].Timestamp,
-			StartCoord:      [2]float64{currentStageWps[0].Location.Latitude, currentStageWps[0].Location.Longitude},
-			EndCoord:        [2]float64{currentStageWps[len(currentStageWps)-1].Location.Latitude, currentStageWps[len(currentStageWps)-1].Location.Longitude},
-			DistanceKm:      stageDist,
-			TotalDistanceKm: cumulativeDistance,
+			StartCoord:      RoundGPS([2]float64{currentStageWps[0].Location.Latitude, currentStageWps[0].Location.Longitude}),
+			EndCoord:        RoundGPS([2]float64{currentStageWps[len(currentStageWps)-1].Location.Latitude, currentStageWps[len(currentStageWps)-1].Location.Longitude}),
+			DistanceKm:      RoundCoord(stageDist, 2),
+			TotalDistanceKm: RoundCoord(cumulativeDistance, 2),
 			CoordsCount:     len(currentStageWps),
 		})
 		currentStageWps = nil
@@ -163,29 +204,42 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 	flushCurrentSegment := func() {
 		if len(currentCoords) > 0 {
 			if len(currentSolidLine) >= 2 {
+				simplifiedSolid := SimplifyCoords(currentSolidLine, DefaultRDPEpsilonKm)
+				for j := range simplifiedSolid {
+					simplifiedSolid[j] = RoundGPS(simplifiedSolid[j])
+				}
 				currentLines = append(currentLines, PathLine{
 					Type:   "solid",
-					Coords: currentSolidLine,
+					Coords: simplifiedSolid,
 				})
 			} else if len(currentSolidLine) == 1 && len(currentLines) == 0 {
+				roundedPt := RoundGPS(currentSolidLine[0])
 				currentLines = append(currentLines, PathLine{
 					Type:   "solid",
-					Coords: [][2]float64{currentSolidLine[0], currentSolidLine[0]},
+					Coords: [][2]float64{roundedPt, roundedPt},
 				})
 			}
 
 			stages, segDist, startCoord, endCoord := computeSegmentStages(currentWaypoints)
 
+			simplifiedCoords := SimplifyCoords(currentCoords, DefaultRDPEpsilonKm)
+			for j := range simplifiedCoords {
+				simplifiedCoords[j] = RoundGPS(simplifiedCoords[j])
+			}
+
+			bounds := computeBounds(currentLines, simplifiedCoords)
+
 			segments = append(segments, Segment{
 				ID:         segmentID,
 				StartTime:  currentStart,
 				EndTime:    currentEnd,
-				DistanceKm: segDist,
-				StartCoord: startCoord,
-				EndCoord:   endCoord,
+				DistanceKm: RoundCoord(segDist, 2),
+				StartCoord: RoundGPS(startCoord),
+				EndCoord:   RoundGPS(endCoord),
+				Bounds:     bounds,
 				Stages:     stages,
 				Lines:      currentLines,
-				Coords:     currentCoords,
+				Coords:     simplifiedCoords,
 			})
 			segmentID++
 		}
@@ -226,16 +280,21 @@ func SegmentWaypoints(waypoints []Waypoint, maxDistanceKm float64, maxTimeGap ti
 			if dist > DefaultDottedPauseDistanceKm {
 				// Flush current solid line
 				if len(currentSolidLine) >= 2 {
+					simplifiedSolid := SimplifyCoords(currentSolidLine, DefaultRDPEpsilonKm)
+					for j := range simplifiedSolid {
+						simplifiedSolid[j] = RoundGPS(simplifiedSolid[j])
+					}
 					currentLines = append(currentLines, PathLine{
 						Type:   "solid",
-						Coords: currentSolidLine,
+						Coords: simplifiedSolid,
 					})
 				}
 				// Connect the gap with a dotted line between prev point and current point
-				prevCoord := [2]float64{prevWp.Location.Latitude, prevWp.Location.Longitude}
+				prevCoord := RoundGPS([2]float64{prevWp.Location.Latitude, prevWp.Location.Longitude})
+				currentCoord := RoundGPS(coord)
 				currentLines = append(currentLines, PathLine{
 					Type:   "dotted",
-					Coords: [][2]float64{prevCoord, coord},
+					Coords: [][2]float64{prevCoord, currentCoord},
 				})
 				// Start new solid line at current point
 				currentSolidLine = [][2]float64{coord}

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"html/template"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,7 +48,39 @@ func NewServer(store *tracker.Store, imageScanner *images.Scanner, compressedIma
 	}, nil
 }
 
-// Handler returns an http.Handler configured with all routes.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	writer io.Writer
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.writer.Write(b)
+}
+
+// GzipMiddleware compresses HTTP response bodies using gzip when the client sends Accept-Encoding: gzip.
+// Images and already compressed assets are excluded.
+func GzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || strings.HasPrefix(r.URL.Path, "/images/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Vary", "Accept-Encoding")
+
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+
+		gzw := &gzipResponseWriter{
+			ResponseWriter: w,
+			writer:         gz,
+		}
+		next.ServeHTTP(gzw, r)
+	})
+}
+
+// Handler returns an http.Handler configured with all routes and Gzip compression middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -82,7 +116,7 @@ func (s *Server) Handler() http.Handler {
 	// Main map page
 	mux.HandleFunc("/", s.handleIndex)
 
-	return mux
+	return GzipMiddleware(mux)
 }
 
 // handleUpdates returns JSON data for incremental updates since a given timestamp.

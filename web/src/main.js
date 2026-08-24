@@ -596,6 +596,23 @@ function fitMapBounds(segs) {
 
   if (Array.isArray(segs)) {
     for (const segment of segs) {
+      if (Array.isArray(segment.bounds) && segment.bounds.length === 4) {
+        bounds.extend([segment.bounds[1], segment.bounds[0]]);
+        bounds.extend([segment.bounds[3], segment.bounds[2]]);
+        count += 2;
+        continue;
+      }
+      if (Array.isArray(segment.lines)) {
+        for (const line of segment.lines) {
+          if (Array.isArray(line.coords)) {
+            for (const pt of line.coords) {
+              bounds.extend([pt[1], pt[0]]);
+              count++;
+            }
+          }
+        }
+        continue;
+      }
       const coords = segment.coords || segment;
       if (Array.isArray(coords)) {
         for (const pt of coords) {

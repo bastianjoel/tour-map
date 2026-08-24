@@ -37,3 +37,20 @@ func DistanceKm(lat1, lon1, lat2, lon2 float64) float64 {
 	c := 2.0 * math.Atan2(math.Sqrt(a), math.Sqrt(1.0-a))
 	return earthRadiusKm * c
 }
+
+// DefaultCoordPrecision is the number of decimal places (6) for GPS coordinate precision (~0.11m).
+const DefaultCoordPrecision = 6
+
+// RoundCoord rounds a float64 coordinate to the specified decimal precision.
+func RoundCoord(val float64, precision int) float64 {
+	pow := math.Pow(10, float64(precision))
+	return math.Round(val*pow) / pow
+}
+
+// RoundGPS rounds a [lat, lng] coordinate pair to 6 decimal places.
+func RoundGPS(coord [2]float64) [2]float64 {
+	return [2]float64{
+		RoundCoord(coord[0], DefaultCoordPrecision),
+		RoundCoord(coord[1], DefaultCoordPrecision),
+	}
+}
